@@ -1,0 +1,15 @@
+#EXTM3U
+#EXTINF:-1 tvg-id="series1" tvg-name="Breaking Bad S01 E01" tvg-logo="http://example.com/logos/breaking_bad.jpg" group-title="SERIES",Breaking Bad S01 E01
+http://example.com/series/breaking_bad_s01e01.mp4
+#EXTINF:-1 tvg-id="series2" tvg-name="Breaking Bad S01 E02" tvg-logo="http://example.com/logos/breaking_bad.jpg" group-title="SERIES",Breaking Bad S01 E02
+http://example.com/series/breaking_bad_s01e02.mp4
+#EXTINF:-1 tvg-id="series3" tvg-name="Game of Thrones 1x01" tvg-logo="http://example.com/logos/got.jpg" group-title="SERIES",Game of Thrones 1x01
+http://example.com/series/game_of_thrones_1x01.mp4
+#EXTINF:-1 tvg-id="movie1" tvg-name="The Shawshank Redemption (1994)" tvg-logo="http://example.com/logos/shawshank.jpg" group-title="MOVIES",The Shawshank Redemption (1994)
+http://example.com/movies/shawshank_redemption_1994.mp4
+#EXTINF:-1 tvg-id="movie2" tvg-name="The Godfather" tvg-logo="http://example.com/logos/godfather.jpg" group-title="MOVIES",The Godfather
+http://example.com/movies/the_godfather.mp4
+#EXTINF:-1 tvg-id="live1" tvg-name="CNN HD" tvg-logo="http://example.com/logos/cnn.jpg" group-title="LIVE",CNN HD
+http://example.com/live/cnn_hd.m3u8
+#EXTINF:-1 tvg-id="live2" tvg-name="BBC News" tvg-logo="http://example.com/logos/bbc.jpg" group-title="LIVE",BBC News
+http://example.com/live/bbc_news.m3u8
