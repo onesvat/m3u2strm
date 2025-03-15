@@ -96,6 +96,8 @@ Access the web UI at `http://your-server-ip:8475` to:
 - Search for specific titles
 - Save your selections for STRM generation
 
+![Web UI Screenshot](screenshot.png)
+
 ## How Content is Organized
 
 ```
