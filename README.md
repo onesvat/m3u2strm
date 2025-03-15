@@ -12,6 +12,7 @@ A Python utility that converts M3U playlists into STRM files and folders for use
 - Generates a clean live.m3u file for direct use in media players
 - Checks for content changes and only updates when necessary
 - Sends Telegram notifications for new content
+- Web UI for browsing and selecting content to include
 - Docker support for easy deployment
 
 ## Getting Started
@@ -53,7 +54,7 @@ cd m3u2strm
 
 2. Install requirements:
 ```bash
-pip install requests
+pip install -r requirements.txt
 ```
 
 3. Run the script:
@@ -71,6 +72,7 @@ Configure the application using environment variables:
 - `M3U_URL`: URL to download M3U file from
 - `TASK_INTERVAL`: Time between updates in minutes (default: 5)
 - `DEBUG_LOGGING`: Set to "true" for verbose logging
+- `WEB_UI_PORT`: Port for the web interface (default: 8475)
 
 ### Content Categorization
 
@@ -78,7 +80,7 @@ Configure the application using environment variables:
 - `MOVIES_GROUPS`: Comma-separated list of group names for movie content 
 - `LIVE_GROUPS`: Comma-separated list of group names for live TV content
 - `INCLUDE_SERIES`: Optional comma-separated list to filter specific series
-- `INCLUDE_MOVIES`: Optional comma-separated list to filter specific series
+- `INCLUDE_MOVIES`: Optional comma-separated list to filter specific movies
 
 ### Telegram Notifications
 
@@ -102,10 +104,24 @@ services:
       - TELEGRAM_BOT_TOKEN=your_bot_token
       - TELEGRAM_CHAT_ID=your_chat_id
       - DEBUG_LOGGING=false
+      - WEB_UI_PORT=8475
+    ports:
+      - "8475:8475"
     volumes:
       - ./data:/app/vods
     restart: unless-stopped
 ```
+
+## Web UI
+
+The application includes a web interface that allows you to:
+
+1. Browse all available series, movies, and live TV channels from your M3U playlist
+2. Select specific series and movies to include in your library
+3. Search through content to find specific titles
+4. Save your selections, which will be used for STRM file generation
+
+Access the web UI by navigating to `http://your-server-ip:8475` in your browser.
 
 ## Output Structure
 

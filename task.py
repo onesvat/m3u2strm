@@ -7,6 +7,8 @@ from pathlib import Path
 import hashlib
 import json
 import logging
+import threading
+import web_ui
 
 # Configure logging
 logging.basicConfig(
@@ -115,20 +117,25 @@ def extract_attribute(text, attr_name):
     return match.group(1) if match else ""
 
 
-def clean_channel_title(title):
-    """Remove quality indicators (HD, FHD, SD, etc.) from channel titles."""
-    # Remove common quality indicators
-    cleaned = re.sub(r'\s+(FHD|HD|SD|UHD|4K)(\s+|$)', ' ', title, flags=re.IGNORECASE)
-    # Remove additional formatting that might be present
-    cleaned = re.sub(r'\s+\(\d+p\)(\s+|$)', ' ', cleaned)
-    # Remove leading/trailing whitespace
-    return cleaned.strip()
 
+def categorize_items(items, all = False):
+    """Categorize items based on filters only. No filters = no output."""
+    # Load filters - these are now mandatory
+    filters = web_ui.load_filters()
 
-def categorize_items(items):
-    series_groups = os.getenv("SERIES_GROUPS", "").split(",")
-    movies_groups = os.getenv("MOVIES_GROUPS", "").split(",")
-    live_groups = os.getenv("LIVE_GROUPS", "").split(",")
+    series_filters = filters.get('series', [])
+    movies_filters = filters.get('movies', [])
+    live_filters = filters.get('live', [])
+    series_groups_filters = os.getenv("SERIES_GROUPS", "").split(',')
+    movies_groups_filters = os.getenv("MOVIES_GROUPS", "").split(',')
+    live_groups_filters = os.getenv("LIVE_GROUPS", "").split(',')
+
+    print(f"Series filters: {series_filters}")
+    print(f"Movies filters: {movies_filters}")
+    print(f"Live filters: {live_filters}")
+    print(f"Series groups filters: {series_groups_filters}")
+    print(f"Movies groups filters: {movies_groups_filters}")
+    print(f"Live groups filters: {live_groups_filters}")
     
     series_items = []
     movie_items = []
@@ -138,75 +145,69 @@ def categorize_items(items):
     channel_dict = {}
     
     for item in items:
-        group = item['group_title']
+        group = item.get('group_title', '')
         
         # Process TV series
-        if any(series_group.strip().lower() in group.lower() for series_group in series_groups if series_group.strip()):
-            # Parse series information: show name, season, episode
+        if series_filters or all:
             series_info = parse_series_info(item['title'])
             if series_info:
-                series_item = SeriesItem(
+                # Check if this series is in our filter list and its group is in our group filters
+                if ((series_info['series_name'].lower() in [s.lower() for s in series_filters] or all) and 
+                    group in series_groups_filters):
+                    series_item = SeriesItem(
+                        title=item['title'],
+                        url=item['url'],
+                        group_title=group,
+                        tvg_id=item['tvg_id'],
+                        tvg_name=item['tvg_name'],
+                        tvg_logo=item['tvg_logo'],
+                        series_name=series_info['series_name'],
+                        season=series_info['season'],
+                        episode=series_info['episode']
+                    )
+                    series_items.append(series_item)
+                    continue
+        
+        # Process movies
+        if movies_filters or all:
+            movie_title = item['title']
+
+            # Check if this movie is in our filter list and its group is in our group filters
+            if ((movie_title.lower() in [m.lower() for m in movies_filters] or all) and
+                group in movies_groups_filters):
+                movie_item = MovieItem(
                     title=item['title'],
                     url=item['url'],
                     group_title=group,
                     tvg_id=item['tvg_id'],
                     tvg_name=item['tvg_name'],
                     tvg_logo=item['tvg_logo'],
-                    series_name=series_info['series_name'],
-                    season=series_info['season'],
-                    episode=series_info['episode']
                 )
-                series_items.append(series_item)
+                movie_items.append(movie_item)
+                continue
         
-        # Process movies
-        elif any(movie_group.strip().lower() in group.lower() for movie_group in movies_groups if movie_group.strip()):
-            year = extract_movie_year(item['title'])
-            movie_item = MovieItem(
-                title=item['title'],
-                url=item['url'],
-                group_title=group,
-                tvg_id=item['tvg_id'],
-                tvg_name=item['tvg_name'],
-                tvg_logo=item['tvg_logo'],
-                year=year
-            )
-            movie_items.append(movie_item)
-        
-        # Process live TV with deduplication
-        elif any(live_group.strip().lower() in group.lower() for live_group in live_groups if live_group.strip()):
+        # Process live TV with both channel and group filters
+        if live_filters or all:
             # Clean the title to remove quality indicators
-            clean_title = clean_channel_title(item['title'])
-            
-            # Use tvg_id as primary key, fall back to clean title if tvg_id is not available
-            channel_key = item['tvg_id'] if item['tvg_id'] else clean_title
-            
-            # Check if we should replace an existing channel with this one
-            if channel_key not in channel_dict:
-                # First time seeing this channel, add it
-                channel_dict[channel_key] = item
-            else:
-                # We already have a version of this channel
-                # Prioritize FHD over HD over SD
-                current_title = channel_dict[channel_key]['title'].upper()
-                new_title = item['title'].upper()
+            live_title = item['title']
+
+            # Check if this live is in our filter list and its group is in our group filters
+            if ((live_title.lower() in [l.lower() for l in live_filters] or all) and
+                group in live_groups_filters):
+        
+                live_item = LiveTVItem(
+                    title=item['title'],
+                    url=item['url'],
+                    group_title=group,
+                    tvg_id=item['tvg_id'],
+                    tvg_name=item['tvg_name'],
+                    tvg_logo=item['tvg_logo']
+                )
                 
-                if 'FHD' in new_title and 'FHD' not in current_title:
-                    # Replace with FHD version
-                    channel_dict[channel_key] = item
-                # If both are FHD or both are not FHD, keep the existing one
-    
-    # Create LiveTVItem objects from the deduplicated channels
-    for item in channel_dict.values():
-        clean_title = clean_channel_title(item['title'])
-        live_item = LiveTVItem(
-            title=clean_title,  # Use cleaned title
-            url=item['url'],
-            group_title="",     # Remove group title as requested
-            tvg_id=item['tvg_id'],
-            tvg_name=item['tvg_name'],
-            tvg_logo=item['tvg_logo'],
-        )
-        live_items.append(live_item)
+                live_items.append(live_item)
+                continue
+
+
     
     return {
         'series': series_items,
@@ -339,31 +340,24 @@ def create_strm_files_for_series(series_items, base_path, checksums=None):
     series_path = os.path.join(base_path, 'series')
     os.makedirs(series_path, exist_ok=True)
     
-    # Get the included series list from environment variable
-    included_series = os.getenv("INCLUDE_SERIES", "")
-    if included_series:
-        included_series_list = [s.strip().lower() for s in included_series.split(",") if s.strip()]
-        logger.info(f"Filtering series to include only: {', '.join(included_series_list)}")
-    else:
-        included_series_list = []
+    # No need to check filters here - already filtered in categorize_items
+    
+    # Skip if there are no series items
+    if not series_items:
+        logger.info("No series items found or selected in filters. No files will be created.")
+        return 0, 0, []
     
     # Group series by name
     series_dict = {}
     for item in series_items:
         if not item.series_name:
             continue
-        
-        # Skip series not in the included list if filtering is active
-        if included_series_list and item.series_name.lower() not in included_series_list:
-            logger.debug(f"Skipping series not in included list: {item.series_name}")
-            continue
             
         if item.series_name not in series_dict:
             series_dict[item.series_name] = []
         series_dict[item.series_name].append(item)
     
-    if included_series_list:
-        logger.info(f"Found {len(series_dict)} matching series out of {len(included_series_list)} requested")
+    logger.info(f"Processing {len(series_dict)} series from filter list")
     
     # Create folders and STRM files
     updated_count = 0
@@ -442,13 +436,12 @@ def create_strm_files_for_movies(movie_items, base_path, checksums=None):
     movies_path = os.path.join(base_path, 'movies')
     os.makedirs(movies_path, exist_ok=True)
     
-    # Get the included movies list from environment variable
-    included_movies = os.getenv("INCLUDE_MOVIES", "")
-    if included_movies:
-        included_movies_list = [m.strip().lower() for m in included_movies.split(",") if m.strip()]
-        logger.info(f"Filtering movies to include only: {', '.join(included_movies_list)}")
-    else:
-        included_movies_list = []
+    # Skip if there are no movie items
+    if not movie_items:
+        logger.info("No movie items found or selected in filters. No files will be created.")
+        return 0, 0, []
+    
+    logger.info(f"Processing {len(movie_items)} movies from filter list")
     
     updated_count = 0
     unchanged_count = 0
@@ -466,10 +459,7 @@ def create_strm_files_for_movies(movie_items, base_path, checksums=None):
         else:
             movie_name = movie_title.strip()
         
-        # Skip movies not in the included list if filtering is active
-        if included_movies_list and movie_name.lower() not in included_movies_list:
-            logger.debug(f"Skipping movie not in included list: {movie_name}")
-            continue
+        # No need to filter here - already filtered in categorize_items
         
         # Create folder name with year if available
         if year:
@@ -526,10 +516,7 @@ def create_strm_files_for_movies(movie_items, base_path, checksums=None):
         else:
             unchanged_count += 1
     
-    if included_movies_list:
-        logger.info(f"Movies: Created {new_files_count} new, updated {updated_count - new_files_count} existing STRM files, {unchanged_count} files unchanged (filtered by inclusion list)")
-    else:
-        logger.info(f"Movies: Created {new_files_count} new, updated {updated_count - new_files_count} existing STRM files, {unchanged_count} files unchanged")
+    logger.info(f"Movies: Created {new_files_count} new, updated {updated_count - new_files_count} existing STRM files, {unchanged_count} files unchanged")
     return updated_count, new_files_count, new_items_details
 
 
@@ -542,11 +529,23 @@ def create_live_m3u_file(live_items, base_path, checksums=None):
     # Create the live.m3u file path
     live_m3u_path = os.path.join(base_path, 'live.m3u')
     
+    # Skip if there are no live items
+    if not live_items:
+        logger.info("No live TV items found or selected in filters. No live.m3u file will be created.")
+        # If an old live.m3u file exists, remove it since we have no items
+        if os.path.exists(live_m3u_path):
+            try:
+                os.remove(live_m3u_path)
+                logger.info(f"Removed old live.m3u file since no channels are selected")
+            except Exception as e:
+                logger.error(f"Failed to remove old live.m3u file: {str(e)}")
+        return 0, 0, []
+    
     # Build the M3U file content
     m3u_content = "#EXTM3U\n"
     for item in live_items:
-        # Add the EXTINF line with attributes but without group-title
-        m3u_content += f'#EXTINF:-1 tvg-id="{item.tvg_id}" tvg-name="{item.tvg_name}" tvg-logo="{item.tvg_logo}",{item.title}\n'
+        # Add the EXTINF line with attributes including group-title
+        m3u_content += f'#EXTINF:-1 tvg-id="{item.tvg_id}" tvg-name="{item.tvg_name}" tvg-logo="{item.tvg_logo}" group-title="{item.group_title}",{item.title}\n'
         # Add the URL
         m3u_content += f'{item.url}\n'
     
@@ -670,27 +669,106 @@ def format_notification_message(new_series_details, new_movies_details, live_upd
     return message
 
 
+def check_m3u_file(m3u_file):
+    """Check if the M3U file exists and is readable."""
+    if not m3u_file:
+        logger.error("No M3U file specified")
+        return False
+    
+    if not os.path.exists(m3u_file):
+        logger.error(f"M3U file {m3u_file} does not exist")
+        return False
+    
+    if not os.path.isfile(m3u_file):
+        logger.error(f"{m3u_file} is not a file")
+        return False
+    
+    logger.info(f"Found valid M3U file: {m3u_file}")
+    return True
+
+def download_from_url(url, destination):
+    """Download an M3U file from a URL."""
+    try:
+        logger.info(f"Downloading M3U file from {url} to {destination}")
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()  # Raise an exception for HTTP errors
+        
+        with open(destination, 'wb') as file:
+            file.write(response.content)
+        
+        logger.info(f"Successfully downloaded M3U file to {destination}")
+        return True
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to download M3U file: {str(e)}")
+        return False
+    except IOError as e:
+        logger.error(f"Failed to save downloaded M3U file: {str(e)}")
+        return False
+
+def get_m3u_file():
+    """Get the path to the M3U file. Download if needed."""
+    # Get M3U file path from environment variable
+    m3u_file = os.getenv("M3U_FILE", "")
+    m3u_url = os.getenv("M3U_URL", "")
+    script_folder = os.path.dirname(os.path.abspath(__file__))
+    
+    logger.debug(f"M3U_FILE env: {m3u_file}, M3U_URL env: {m3u_url}")
+    
+
+    if m3u_file:
+        return m3u_file
+    elif m3u_url:
+        logger.info(f"Downloading M3U file from URL: {m3u_url}")
+        m3u_file = os.path.join(script_folder, "downloaded_playlist.m3u")
+
+        # Check if recently downloaded
+        if os.path.exists(m3u_file):
+            # Get the time the file was last modified
+            last_modified = os.path.getmtime(m3u_file)
+            # Get the current time
+            current_time = time.time()
+            # Check if the file was modified in the last 5 minutes
+            if current_time - last_modified < 5 * 60:
+                logger.info("M3U file was recently downloaded, skipping download")
+                return m3u_file
+        
+        # Download the file
+        if download_from_url(m3u_url, m3u_file):
+            return m3u_file
+    else:
+        logger.error("No M3U file specified. Please set M3U_FILE or M3U_URL environment variable.")
+    
+    return m3u_file
+
 def run_task():
     logger.info("Task is running...")
-    m3u_file = os.getenv("M3U_FILE", "m3u_file.m3u")
+    
+    # Get or download M3U file
+    m3u_file = get_m3u_file()
+    
+    # Check if M3U file exists and is valid
+    if not check_m3u_file(m3u_file):
+        logger.error("No valid M3U file found. Please specify a valid file using the M3U_FILE or M3U_URL environment variable.")
+    
     # Set output directory to script folder + '/vods'
     script_folder = os.path.dirname(os.path.abspath(__file__))
     output_dir = os.path.join(script_folder, 'vods')
     checksums_file = os.path.join(output_dir, ".checksums.json")
     
-    # Check if file exists
-    if not os.path.exists(m3u_file):
-        logger.error(f"M3U file {m3u_file} does not exist")
-        return
-    
     # Parse and categorize M3U items
     items = parse_m3u_file(m3u_file)
     categorized_items = categorize_items(items)
     
+    # Check if we have any items after filtering
+    if not categorized_items['series'] and not categorized_items['movies'] and not categorized_items['live']:
+        logger.warning("No items remain after applying filters. No files will be created.")
+        logger.warning("Please update your filters in the web UI to include specific content.")
+        return
+    
     # Print summary of categorized items
-    logger.info(f"Found {len(categorized_items['series'])} series items")
-    logger.info(f"Found {len(categorized_items['movies'])} movie items")
-    logger.info(f"Found {len(categorized_items['live'])} live TV items")
+    logger.info(f"Found {len(categorized_items['series'])} series items after filtering")
+    logger.info(f"Found {len(categorized_items['movies'])} movie items after filtering")
+    logger.info(f"Found {len(categorized_items['live'])} live TV items after filtering")
     
     # Create output directories if they don't exist
     os.makedirs(output_dir, exist_ok=True)
@@ -744,27 +822,134 @@ def run_task():
         logger.info("No changes detected, all files are up to date.")
 
 
-if __name__ == "__main__":
-    logger.info("Starting m3u2strm converter")
-    M3U_FILE = os.getenv("M3U_FILE")
-    if M3U_FILE:
-        logger.info(f"Using provided M3U file: {M3U_FILE}")
+# Start the web UI in a separate thread
+def start_web_ui_thread():
+    # Try to find or download M3U file before starting the web UI
+    m3u_file = get_m3u_file()
+    
+    if not m3u_file or not os.path.exists(m3u_file):
+        logger.warning("No valid M3U file found before starting web UI")
+    
+    web_thread = threading.Thread(target=web_ui.start_web_ui)
+    web_thread.daemon = True
+    web_thread.start()
+    logger.info(f"Web UI started on port {web_ui.WEB_UI_PORT}")
+
+# Global variable to store the last time the task was run
+last_run_time = 0
+
+# Function to rerun the task
+def rerun_task():
+    """Manually trigger the task to run"""
+    logger.info("Manually triggering task run (likely from web UI)")
+    global last_run_time
+    # Only run if it's been at least 10 seconds since last run to prevent spam
+    current_time = time.time()
+    if current_time - last_run_time > 10:
+        last_run_time = current_time
+        # Run in a separate thread to not block the web UI
+        task_thread = threading.Thread(target=lambda: run_task())
+        task_thread.daemon = True
+        task_thread.start()
+        return True
     else:
-        M3U_URL = os.getenv("M3U_URL")
-        if M3U_URL:
-            download_m3u_file(M3U_URL, "m3u_file.m3u")
-        else:
-            logger.warning("M3U_URL environment variable is not set")
+        logger.warning("Task run requested but rejected (ran too recently)")
+        return False
 
-    # Create initial directory structure
-    script_folder = os.path.dirname(os.path.abspath(__file__))
-    output_dir = os.path.join(script_folder, 'vods')
-    os.makedirs(os.path.join(output_dir, "series"), exist_ok=True)
-    os.makedirs(os.path.join(output_dir, "movies"), exist_ok=True)
+def ensure_config_directory():
+    """Make sure the config directory exists and migrate env vars if needed"""
+    config_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config')
+    os.makedirs(config_dir, exist_ok=True)
+    
+    filters_file = os.path.join(config_dir, 'filters.json')
+    
+    # If filters file doesn't exist, try to create it from environment variables
+    if not os.path.exists(filters_file):
+        filters = {
+            'series': [],
+            'movies': [],
+            'live': [],
+            'series_groups': [],
+            'movies_groups': [],
+            'live_groups': []
+        }
+        
+        # Check for legacy environment variables
+        include_series = os.getenv("INCLUDE_SERIES", "")
+        include_movies = os.getenv("INCLUDE_MOVIES", "")
+        include_live = os.getenv("INCLUDE_LIVE", "")
+        series_groups = os.getenv("SERIES_GROUPS", "")
+        movies_groups = os.getenv("MOVIES_GROUPS", "")
+        live_groups = os.getenv("LIVE_GROUPS", "")
+        
+        if include_series:
+            filters['series'] = [s.strip() for s in include_series.split(",") if s.strip()]
+        if include_movies:
+            filters['movies'] = [m.strip() for m in include_movies.split(",") if m.strip()]
+        if include_live:
+            filters['live'] = [l.strip() for l in include_live.split(",") if l.strip()]
 
-    INTERVAL = int(os.getenv("TASK_INTERVAL", 5))  # Default to 5 minutes if not set
-    logger.info(f"Task will run every {INTERVAL} minutes")
-    while True:
-        run_task()
-        logger.info(f"Sleeping for {INTERVAL} minutes")
-        time.sleep(INTERVAL * 60)
+        
+        # Save to config file
+        try:
+            with open(filters_file, 'w') as f:
+                json.dump(filters, f, indent=2)
+            logger.info(f"Created initial filters.json from environment variables")
+        except Exception as e:
+            logger.error(f"Error creating initial filters.json: {str(e)}")
+
+    # Check for filter update signal file
+    signal_file = os.path.join(config_dir, '.filters_updated')
+    if os.path.exists(signal_file):
+        try:
+            # Get modification time to avoid re-running too frequently
+            mod_time = os.path.getmtime(signal_file)
+            current_time = time.time()
+            
+            # Only react to recent updates (within last 30 seconds)
+            if current_time - mod_time < 30:
+                logger.info("Detected filters update, rerunning task")
+                # Remove the signal file
+                os.remove(signal_file)
+                # Rerun the task
+                return rerun_task()
+            else:
+                # File is old, remove it
+                os.remove(signal_file)
+        except Exception as e:
+            logger.error(f"Error handling filters update signal: {str(e)}")
+    
+    return False
+
+if __name__ == "__main__":
+    try:      
+        # Log system information
+        script_folder = os.path.dirname(os.path.abspath(__file__))
+        logger.info(f"Starting application from {script_folder}")
+        logger.debug(f"Current directory: {os.getcwd()}")
+        logger.debug(f"M3U_FILE environment variable: {os.getenv('M3U_FILE', 'not set')}")
+        logger.debug(f"M3U_URL environment variable: {os.getenv('M3U_URL', 'not set')}")
+        
+        # Ensure config directory exists and migrate env vars if needed
+        ensure_config_directory()
+        
+        # Start the web UI
+        start_web_ui_thread()
+        
+        # Create initial directory structure
+        output_dir = os.path.join(script_folder, 'vods')
+        os.makedirs(os.path.join(output_dir, "series"), exist_ok=True)
+        os.makedirs(os.path.join(output_dir, "movies"), exist_ok=True)
+
+        INTERVAL = int(os.getenv("TASK_INTERVAL", 5))  # Default to 5 minutes if not set
+        logger.info(f"Task will run every {INTERVAL} minutes")
+        
+        while True:
+            run_task()
+            
+            logger.info(f"Sleeping for {INTERVAL} minutes")
+            time.sleep(INTERVAL * 60)
+        
+    except Exception as e:
+        logger.error(f"An error occurred: {str(e)}", exc_info=True)  # Include traceback
+        print(f"An error occurred: {e}")

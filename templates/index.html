@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>M3U2STRM Manager</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            color: #333;
+        }
+        h1 {
+            color: #2c3e50;
+        }
+        .container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .section {
+            flex: 1;
+            min-width: 300px;
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .list-container {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+            padding: 10px;
+            background-color: white;
+        }
+        .search {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+        }
+        .checkbox-item {
+            margin: 5px 0;
+        }
+        button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 3px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        button:hover {
+            background-color: #2980b9;
+        }
+        .live-item {
+            padding: 5px;
+            margin: 5px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .select-buttons {
+            margin-bottom: 10px;
+        }
+        .warning {
+            background-color: #fff3cd;
+            color: #856404;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+            border-left: 5px solid #ffeeba;
+        }
+    </style>
+</head>
+<body>
+    <h1>M3U2STRM Content Manager</h1>
+    
+    {% if not has_filters %}
+    <div class="warning">
+        <strong>Warning!</strong> You must select specific content to include - filtering is now mandatory. 
+        No content = no output files. Please select the series, movies, and live TV channels you want below.
+    </div>
+    {% endif %}
+    
+    <form action="/update_filters" method="POST">
+        <div class="container">
+            <div class="section">
+                <h2>Series</h2>
+                <div class="select-buttons">
+                    <button type="button" onclick="selectAll('series')">Select All</button>
+                    <button type="button" onclick="deselectAll('series')">Deselect All</button>
+                </div>
+                <input type="text" class="search" id="seriesSearch" placeholder="Search series...">
+                <div class="list-container">
+                    {% for series in series %}
+                        <div class="checkbox-item series-item">
+                            <label>
+                                <input type="checkbox" name="include_series" value="{{ series }}" 
+                                       {% if series in include_series %}checked{% endif %}>
+                                {{ series }}
+                            </label>
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>Movies</h2>
+                <div class="select-buttons">
+                    <button type="button" onclick="selectAll('movies')">Select All</button>
+                    <button type="button" onclick="deselectAll('movies')">Deselect All</button>
+                </div>
+                <input type="text" class="search" id="moviesSearch" placeholder="Search movies...">
+                <div class="list-container">
+                    {% for movie in movies %}
+                        <div class="checkbox-item movies-item">
+                            <label>
+                                <input type="checkbox" name="include_movies" value="{{ movie }}" 
+                                       {% if movie in include_movies %}checked{% endif %}>
+                                {{ movie }}
+                            </label>
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>Live TV</h2>
+                <div class="select-buttons">
+                    <button type="button" onclick="selectAll('live')">Select All</button>
+                    <button type="button" onclick="deselectAll('live')">Deselect All</button>
+                </div>
+                <input type="text" class="search" id="liveSearch" placeholder="Search channels...">
+                <div class="list-container">
+                    {% for channel in live_tv %}
+                        <div class="checkbox-item live-item">
+                            <label>
+                                <input type="checkbox" name="include_live" value="{{ channel.title }}" 
+                                       {% if channel.title in include_live %}checked{% endif %}>
+
+                                {% if channel['tvg_logo'] %}
+                                    <img src="{{ channel['tvg_logo'] }}" alt="{{ channel.title }}" style="height: 20px; margin-right: 5px;">
+                                {% endif %}
+                                
+                                {% if channel['group_title'] %}
+                                    {{ channel['group_title'] }} | 
+                                {% endif %}
+
+                                {{ channel.title }}
+                            </label>
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <button type="submit">Save Filters</button>
+    </form>
+
+    <script>
+        // Search functionality
+        function setupSearch(inputId, itemClass) {
+            document.getElementById(inputId).addEventListener('input', function() {
+                const searchText = this.value.toLowerCase();
+                const items = document.getElementsByClassName(itemClass);
+                
+                for (let i = 0; i < items.length; i++) {
+                    const itemText = items[i].textContent.toLowerCase();
+                    if (itemText.includes(searchText)) {
+                        items[i].style.display = '';
+                    } else {
+                        items[i].style.display = 'none';
+                    }
+                }
+            });
+        }
+
+        // Select/Deselect All
+        function selectAll(type) {
+            const checkboxes = document.querySelectorAll(`input[name="include_${type}"]`);
+            checkboxes.forEach(checkbox => checkbox.checked = true);
+        }
+
+        function deselectAll(type) {
+            const checkboxes = document.querySelectorAll(`input[name="include_${type}"]`);
+            checkboxes.forEach(checkbox => checkbox.checked = false);
+        }
+
+        // Setup search for each section
+        document.addEventListener('DOMContentLoaded', function() {
+            setupSearch('seriesSearch', 'series-item');
+            setupSearch('moviesSearch', 'movies-item');
+            setupSearch('liveSearch', 'live-item');
+        });
+    </script>
+</body>
+</html>

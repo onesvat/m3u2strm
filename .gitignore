@@ -1,0 +1,5 @@
+example.m3u
+.vscode/launch.json
+__pycache__
+vods/
+config/

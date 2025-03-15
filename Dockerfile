@@ -1,24 +1,28 @@
 FROM python:3.9-slim
 
-# Set the working directory
 WORKDIR /app
 
-# Copy the task script into the container
+# Install required packages
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application files
 COPY task.py .
-COPY example.m3u .
+COPY web_ui.py .
+COPY requirements.txt .
+COPY templates templates
 
-# Install necessary dependencies
-RUN pip install requests
+# Create directory for volume mount
+RUN mkdir -p /app/vods
+RUN mkdir -p /app/config
 
-# Document environment variables
-# M3U_FILE: Path to the M3U file
-# M3U_URL: URL to download the M3U file from
-# TASK_INTERVAL: Interval in minutes between runs
-# JELLYFIN_URL: URL of the Jellyfin server
-# JELLYFIN_API_KEY: API key for Jellyfin
-# TELEGRAM_BOT_TOKEN: Token for Telegram Bot API
-# TELEGRAM_CHAT_ID: Telegram chat ID to send notifications to
-# DEBUG_LOGGING: Set to "true" to enable debug logging
+# Environment variables (can be overridden at runtime)
+ENV TASK_INTERVAL=5 \
+    DEBUG_LOGGING=false \
+    WEB_UI_PORT=8475 
 
-# Set the entrypoint to the task script
-ENTRYPOINT ["python", "task.py"]
+# Expose the web UI port
+EXPOSE ${WEB_UI_PORT}
+
+# Run the application
+CMD ["python", "task.py"]
