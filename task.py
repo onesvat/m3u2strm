@@ -740,6 +740,41 @@ def get_m3u_file():
     
     return m3u_file
 
+def refresh_jellyfin_libraries(updated_content_types):
+    """Refresh Jellyfin libraries by sending a generic refresh request."""
+    jellyfin_url = os.getenv("JELLYFIN_URL")
+    jellyfin_api_key = os.getenv("JELLYFIN_API_KEY")
+    
+    if not jellyfin_url or not jellyfin_api_key:
+        logger.debug("Jellyfin URL or API key not configured, skipping library refresh")
+        return False
+    
+    try:
+        # Strip trailing slash from URL if present
+        jellyfin_url = jellyfin_url.rstrip('/')
+        
+        headers = {
+            "X-MediaBrowser-Token": jellyfin_api_key,  # Use X-MediaBrowser-Token for compatibility
+            "Content-Type": "application/json"
+        }
+        
+        # Use the generic library refresh endpoint
+        refresh_url = f"{jellyfin_url}/Library/Refresh"
+        
+        # Send an empty POST request to refresh all libraries
+        response = requests.post(refresh_url, data="", headers=headers)
+        response.raise_for_status()
+        
+        logger.info(f"Successfully triggered Jellyfin library refresh for: {', '.join(updated_content_types)}")
+        return True
+            
+    except Exception as e:
+        logger.error(f"Error refreshing Jellyfin libraries: {str(e)}")
+        # Add more detailed debug info for network errors
+        if isinstance(e, requests.exceptions.RequestException):
+            logger.debug(f"Request error details: {e.response.text if getattr(e, 'response', None) else 'No response'}")
+        return False
+
 def run_task():
     logger.info("Task is running...")
     
@@ -808,6 +843,20 @@ def run_task():
     
     if total_updated > 0:
         logger.info(f"File creation complete. Created {total_new} new files, updated {total_updated - total_new} existing files.")
+        
+        # Refresh Jellyfin libraries based on what content was updated
+        updated_content_types = []
+        if series_updated > 0:
+            updated_content_types.append('series')
+        if movies_updated > 0:
+            updated_content_types.append('movies')
+        if live_updated > 0:
+            updated_content_types.append('live')
+            
+        if updated_content_types:
+            refresh_result = refresh_jellyfin_libraries(updated_content_types)
+            if refresh_result:
+                logger.info("Successfully refreshed Jellyfin libraries")
         
         # Send user notification only for new files
         if total_new > 0:
