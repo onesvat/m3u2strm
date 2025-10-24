@@ -346,17 +346,39 @@ def create_strm_files_for_series(series_items, base_path, checksums=None):
     if not series_items:
         logger.info("No series items found or selected in filters. No files will be created.")
         return 0, 0, []
-    
-    # Group series by name
+
+    # Detect duplicates across groups
+    series_group_mapping = {}  # Maps series_name to set of group_titles
+    for item in series_items:
+        if not item.series_name:
+            continue
+        if item.series_name not in series_group_mapping:
+            series_group_mapping[item.series_name] = set()
+        series_group_mapping[item.series_name].add(item.group_title)
+
+    # Identify series that appear in multiple groups
+    duplicate_series = {name for name, groups in series_group_mapping.items() if len(groups) > 1}
+
+    # Modify series_name for duplicates to include group name
+    if duplicate_series:
+        logger.info(f"Found {len(duplicate_series)} series with duplicates across groups: {', '.join(duplicate_series)}")
+        for item in series_items:
+            if item.series_name in duplicate_series:
+                # Append group name in parentheses
+                original_name = item.series_name
+                item.series_name = f"{item.series_name} ({item.group_title})"
+                logger.debug(f"Renamed '{original_name}' to '{item.series_name}' due to duplicate")
+
+    # Group series by name (with updated names for duplicates)
     series_dict = {}
     for item in series_items:
         if not item.series_name:
             continue
-            
+
         if item.series_name not in series_dict:
             series_dict[item.series_name] = []
         series_dict[item.series_name].append(item)
-    
+
     logger.info(f"Processing {len(series_dict)} series from filter list")
     
     # Create folders and STRM files
