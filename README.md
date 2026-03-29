@@ -79,6 +79,7 @@ Content type is now automatically detected from URL patterns:
 |----------|-------------|---------|
 | `TASK_INTERVAL` | Minutes between updates | `5` |
 | `WEB_UI_PORT` | Port for the web interface | `8475` |
+| `RECENTLY_ADDED_LIMIT` | Number of items to show in "Son Eklenenler" section | `100` |
 | `DEBUG_LOGGING` | Enable verbose logging | `false` |
 | `NEW_CONTENT_NOTIFICATION` | Enable new content discovery notifications (sends highest ID items) | `false` |
 

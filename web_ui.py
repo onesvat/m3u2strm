@@ -99,7 +99,8 @@ def index():
         all_movie_names = sorted(set(m.title for m in categorized["movies"]))
         all_live = categorized["live"]
 
-        recently_added = get_recently_added_items(m3u_file, 100)
+        recent_limit = int(os.getenv("RECENTLY_ADDED_LIMIT", "100"))
+        recently_added = get_recently_added_items(m3u_file, recent_limit)
 
         for item in recently_added:
             if item["content_type"] == "series":

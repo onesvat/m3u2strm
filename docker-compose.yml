@@ -10,6 +10,7 @@ services:
       - TELEGRAM_BOT_TOKEN=your_bot_token
       - TELEGRAM_CHAT_ID=your_chat_id
       - NEW_CONTENT_NOTIFICATION=false
+      - RECENTLY_ADDED_LIMIT=100
       - DEBUG_LOGGING=false
       - WEB_UI_PORT=8475 
     ports:

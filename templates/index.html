@@ -462,7 +462,7 @@
                                    {% if channel.title in include_live %}checked{% endif %}
                                    onchange="syncRecentCard('live', '{{ channel.title }}', this.checked)">
                             {% if channel['tvg_logo'] %}
-                            <img src="{{ channel['tvg_logo'] }}" alt="{{ channel.title }}" class="logo">
+                            <img src="{{ channel['tvg_logo'] }}" alt="{{ channel.title }}" class="logo" loading="lazy">
                             {% endif %}
                             <span>
                                 {% if channel['group_title'] %}
@@ -487,7 +487,7 @@
 
     {% if recently_added %}
     <div class="recently-added-section">
-        <h2><span class="fire">&#128293;</span> Son Eklenenler (Last 100)</h2>
+        <h2><span class="fire">&#128293;</span> Son Eklenenler</h2>
         <div class="recent-grid">
             {% for item in recently_added %}
             <div class="recent-card {% if item['is_selected'] %}selected{% endif %}"
@@ -506,7 +506,7 @@
                 </span>
 
                 {% if item['tvg_logo'] %}
-                <img src="{{ item['tvg_logo'] }}" alt="" class="thumbnail">
+                <img src="{{ item['tvg_logo'] }}" alt="" class="thumbnail" loading="lazy">
                 {% else %}
                 <div class="thumbnail-placeholder">
                     {% if item['content_type'] == 'movie' %}&#127910;{% endif %}

@@ -1073,7 +1073,8 @@ def run_task():
     items = parse_m3u_file(m3u_file)
 
     # Get recently added items (for UI + optional notification)
-    recent_items = get_recently_added_items(m3u_file, 100)
+    recent_limit = int(os.getenv("RECENTLY_ADDED_LIMIT", "100"))
+    recent_items = get_recently_added_items(m3u_file, recent_limit)
 
     # Log all items to system catalog (before filtering)
     log_system_catalog(items, output_dir)
