@@ -14,13 +14,14 @@ M3U2STRM takes your M3U playlist and:
 ## Features
 
 - ✅ Converts M3U streams to organized STRM files
-- 📁 Categorizes content intelligently (series, movies, live TV)
+- 📁 Auto-detects content type from URL patterns (series, movies, live)
 - 📺 Creates proper TV series structure with seasons and episodes
 - 🎬 Organizes movies with year information when available
 - 📡 Generates a clean live.m3u file for direct use
+- 🔥 Shows recently added content (highest URL IDs)
 - 🔄 Checks for content changes and updates efficiently
 - 📱 Sends Telegram notifications for new content
-- 🌐 Web UI for browsing and selecting content
+- 🌐 Dark-themed Web UI for browsing and selecting content
 - 🐳 Docker support for easy deployment
 - 🔄 Optional Jellyfin library refresh integration
 
@@ -63,13 +64,14 @@ python task.py
 | `M3U_FILE` | Path to local M3U file (alternative to URL) | `/path/to/playlist.m3u` |
 
 ### Content Groups
-These settings define which M3U groups contain which type of content:
+Content type is now automatically detected from URL patterns:
+- **Series**: URLs containing `/series/` with `.mkv` extension
+- **Movies**: URLs containing `/movie/` with `.mkv` extension
+- **Live TV**: Requires group filter (no URL pattern available)
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `SERIES_GROUPS` | Groups containing TV series | `SERIES,DIZILER,TV_SHOWS` |
-| `MOVIES_GROUPS` | Groups containing movies | `MOVIES,FILMLER,FILMS` |
-| `LIVE_GROUPS` | Groups containing live TV | `LIVE,TV,CHANNELS` |
+| `LIVE_GROUPS` | Groups containing live TV (required for Live TV filtering) | `LIVE,TV,CHANNELS,ULUSAL` |
 
 ### Additional Settings
 
@@ -78,6 +80,7 @@ These settings define which M3U groups contain which type of content:
 | `TASK_INTERVAL` | Minutes between updates | `5` |
 | `WEB_UI_PORT` | Port for the web interface | `8475` |
 | `DEBUG_LOGGING` | Enable verbose logging | `false` |
+| `NEW_CONTENT_NOTIFICATION` | Enable new content discovery notifications (sends highest ID items) | `false` |
 
 ### Notifications & Integration
 
@@ -114,23 +117,30 @@ vods/
 
 ## Content Detection Logic
 
-- **Series**: Detected by patterns like "S01 E01" or "1x01" in titles
-- **Movies**: Identified by group and optionally by year in parentheses
-- **Live TV**: All streams in configured live groups
+Content type is now automatically detected from URL patterns:
+- **Series**: URLs containing `/series/` with `.mkv` extension
+- **Movies**: URLs containing `/movie/` with `.mkv` extension
+- **Live TV**: All other URLs (requires `LIVE_GROUPS` filter)
+
+Episode detection patterns:
+- "S01 E01" format
+- "1x01" format
 
 ## M3U Format Example
 
 ```
 #EXTM3U
 #EXTINF:-1 tvg-id="series1" tvg-name="Breaking Bad S01 E01" group-title="SERIES",Breaking Bad S01 E01
-http://example.com/series/breaking_bad_s01e01.mp4
+http://example.com/series/user/pass/12345.mkv
 
 #EXTINF:-1 tvg-id="movie1" tvg-name="Inception (2010)" group-title="MOVIES",Inception (2010)
-http://example.com/movies/inception.mp4
+http://example.com/movie/user/pass/67890.mkv
 
 #EXTINF:-1 tvg-id="live1" tvg-name="CNN" group-title="LIVE",CNN HD
-http://example.com/live/cnn.m3u8
+http://example.com/user/pass/11111
 ```
+
+**Note**: Series and Movies are detected from `/series/` and `/movie/` URL paths. Live TV uses group-title filter.
 
 ## Common Use Cases
 
@@ -141,7 +151,8 @@ http://example.com/live/cnn.m3u8
 
 ## Troubleshooting
 
-- **No content appearing?** Check your group settings and filters in the web UI
+- **No content appearing?** Check your filters in the web UI - you must select specific series, movies, or channels
+- **Live TV not detected?** Verify `LIVE_GROUPS` environment variable matches your M3U group titles
 - **Series not detected?** Ensure titles follow "S01 E01" or "1x01" naming patterns
 - **Docker issues?** Verify volume mappings and environment variables
 

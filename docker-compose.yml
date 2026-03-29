@@ -6,11 +6,10 @@ services:
     environment:
       - TASK_INTERVAL=30
       - M3U_URL=http://example.com/playlist.m3u
-      - SERIES_GROUPS=SERIES,DIZILER
-      - MOVIES_GROUPS=MOVIES,FILMLER
       - LIVE_GROUPS=LIVE,TV,ULUSAL
       - TELEGRAM_BOT_TOKEN=your_bot_token
       - TELEGRAM_CHAT_ID=your_chat_id
+      - NEW_CONTENT_NOTIFICATION=false
       - DEBUG_LOGGING=false
       - WEB_UI_PORT=8475 
     ports:
