@@ -642,8 +642,8 @@ def create_live_m3u_file(live_items, base_path, checksums=None):
     return (1 if updated else 0), (1 if is_new_file and updated else 0), []
 
 
-def send_telegram_notification(message, silent=False):
-    """Send notification via Telegram bot. If silent=True, no sound/alert on device."""
+def send_telegram_notification(message):
+    """Send notification via Telegram bot."""
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -657,17 +657,11 @@ def send_telegram_notification(message, silent=False):
         api_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         params = {"chat_id": chat_id, "text": message, "parse_mode": "HTML"}
 
-        if silent:
-            params["disable_notification"] = True
-
         response = requests.post(api_url, params=params)
         response_data = response.json()
 
         if response.status_code == 200 and response_data.get("ok"):
-            if silent:
-                logger.info("Successfully sent silent notification via Telegram")
-            else:
-                logger.info("Successfully sent notification via Telegram")
+            logger.info("Successfully sent notification via Telegram")
         else:
             logger.error(
                 f"Failed to send Telegram notification. Status code: {response.status_code}, Response: {response_data}"
@@ -733,63 +727,6 @@ def format_notification_message(new_series_details, new_movies_details, live_upd
     message += f"Total: {total_new} new items added to your media library."
 
     return message
-
-
-def format_new_content_message(recent_items):
-    """Format new content discovery message for Telegram."""
-    message = "🔥 <b>M3U'da Son Eklenenler</b>\n\n"
-
-    series = [i for i in recent_items if i.get("content_type") == "series"]
-    movies = [i for i in recent_items if i.get("content_type") == "movie"]
-    live = [i for i in recent_items if i.get("content_type") == "live"]
-
-    if series:
-        message += "<b>📺 Series:</b>\n"
-        for s in series[:10]:
-            ep_range = s.get("episode_range", "")
-            ep_count = s.get("total_episodes", 1)
-            if ep_count > 1:
-                message += f"• {s['title']} {ep_range} ({ep_count} episodes)\n"
-            else:
-                message += f"• {s['title']} {ep_range}\n"
-        if len(series) > 10:
-            message += f"• and {len(series) - 10} more...\n"
-        message += "\n"
-
-    if movies:
-        message += "<b>🎬 Movies:</b>\n"
-        for m in movies[:10]:
-            message += f"• {m['title']}\n"
-        if len(movies) > 10:
-            message += f"• and {len(movies) - 10} more...\n"
-        message += "\n"
-
-    if live:
-        message += "<b>🔴 Live Channels:</b>\n"
-        for l in live[:10]:
-            message += f"• {l['title']}\n"
-        if len(live) > 10:
-            message += f"• and {len(live) - 10} more...\n"
-        message += "\n"
-
-    total = len(series) + len(movies) + len(live)
-    message += f"Total: {total} newly discovered content\n"
-    message += "(Not in your filters, just discovered from provider)"
-
-    return message
-
-
-def send_new_content_notification(recent_items):
-    """Send silent notification for newly discovered content (optional)."""
-    if os.getenv("NEW_CONTENT_NOTIFICATION", "false").lower() != "true":
-        logger.debug(
-            "New content notification disabled (NEW_CONTENT_NOTIFICATION=false)"
-        )
-        return
-
-    message = format_new_content_message(recent_items)
-    send_telegram_notification(message, silent=True)
-    logger.info("Sent new content discovery notification (silent)")
 
 
 def log_system_catalog(items, output_dir):
@@ -1175,10 +1112,8 @@ def run_task():
             )
             send_telegram_notification(notification_message)
 
-        # Send new content discovery notification (if enabled)
-        send_new_content_notification(recent_items)
-    else:
-        logger.info("No changes detected, all files are up to date.")
+        else:
+            logger.info("No changes detected, all files are up to date.")
 
 
 # Start the web UI in a separate thread
