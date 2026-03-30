@@ -13,10 +13,8 @@ app = Flask(__name__)
 WEB_UI_PORT = int(os.getenv("WEB_UI_PORT", 5500))
 
 CONFIG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config")
-VODS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vods")
 os.makedirs(CONFIG_DIR, exist_ok=True)
 FILTERS_FILE = os.path.join(CONFIG_DIR, "filters.json")
-UI_CACHE_FILE = os.path.join(VODS_DIR, ".ui_cache.json")
 
 
 def load_filters():
@@ -37,17 +35,6 @@ def load_filters():
             logger.error(f"Error loading filters from {FILTERS_FILE}: {str(e)}")
 
     return filters
-
-
-def load_ui_cache():
-    """Load UI cache from file for fast page loads."""
-    if os.path.exists(UI_CACHE_FILE):
-        try:
-            with open(UI_CACHE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error(f"Error loading UI cache: {str(e)}")
-    return None
 
 
 def save_filters(filters, trigger_task=True):
@@ -73,6 +60,13 @@ def save_filters(filters, trigger_task=True):
 
 @app.route("/")
 def index():
+    from task import (
+        parse_m3u_file,
+        categorize_items,
+        get_m3u_file,
+        get_recently_added_items,
+    )
+
     filters = load_filters()
     include_series = filters.get("series", [])
     include_movies = filters.get("movies", [])
@@ -80,9 +74,9 @@ def index():
 
     has_filters = bool(include_series or include_movies or include_live)
 
-    ui_cache = load_ui_cache()
+    m3u_file = get_m3u_file()
 
-    if not ui_cache:
+    if not m3u_file or not os.path.exists(m3u_file):
         return render_template(
             "index.html",
             series=[],
@@ -94,37 +88,55 @@ def index():
             has_filters=has_filters,
             filters_mandatory=True,
             recently_added=[],
-            cache_time=None,
-            error="Cache not ready. Please wait for the next task run.",
+            error="No valid M3U file found",
         )
 
-    all_series_names = ui_cache.get("series", [])
-    all_movie_names = ui_cache.get("movies", [])
-    all_live = ui_cache.get("live", [])
-    recently_added = ui_cache.get("recently_added", [])
-    cache_time = ui_cache.get("last_updated")
+    try:
+        items = parse_m3u_file(m3u_file)
+        categorized = categorize_items(items, True)
 
-    for item in recently_added:
-        if item["content_type"] == "series":
-            item["is_selected"] = item["title"] in include_series
-        elif item["content_type"] == "movie":
-            item["is_selected"] = item["title"] in include_movies
-        else:
-            item["is_selected"] = item["title"] in include_live
+        all_series_names = sorted(set(s.series_name for s in categorized["series"]))
+        all_movie_names = sorted(set(m.title for m in categorized["movies"]))
+        all_live = categorized["live"]
 
-    return render_template(
-        "index.html",
-        series=all_series_names,
-        movies=all_movie_names,
-        live_tv=all_live,
-        include_series=include_series,
-        include_movies=include_movies,
-        include_live=include_live,
-        has_filters=has_filters,
-        filters_mandatory=True,
-        recently_added=recently_added,
-        cache_time=cache_time,
-    )
+        recent_limit = int(os.getenv("RECENTLY_ADDED_LIMIT", "100"))
+        recently_added = get_recently_added_items(m3u_file, recent_limit)
+
+        for item in recently_added:
+            if item["content_type"] == "series":
+                item["is_selected"] = item["title"] in include_series
+            elif item["content_type"] == "movie":
+                item["is_selected"] = item["title"] in include_movies
+            else:
+                item["is_selected"] = item["title"] in include_live
+
+        return render_template(
+            "index.html",
+            series=all_series_names,
+            movies=all_movie_names,
+            live_tv=all_live,
+            include_series=include_series,
+            include_movies=include_movies,
+            include_live=include_live,
+            has_filters=has_filters,
+            filters_mandatory=True,
+            recently_added=recently_added,
+        )
+    except Exception as e:
+        logger.error(f"Error processing M3U file: {str(e)}", exc_info=True)
+        return render_template(
+            "index.html",
+            series=[],
+            movies=[],
+            live_tv=[],
+            include_series=include_series,
+            include_movies=include_movies,
+            include_live=include_live,
+            has_filters=has_filters,
+            filters_mandatory=True,
+            recently_added=[],
+            error=f"Error processing M3U file: {str(e)}",
+        )
 
 
 @app.route("/toggle_item", methods=["POST"])

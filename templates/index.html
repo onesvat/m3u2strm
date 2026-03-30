@@ -35,20 +35,9 @@
         }
 
         .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
+            text-align: center;
             padding: 30px 0;
             margin-bottom: 30px;
-            flex-wrap: wrap;
-        }
-
-        .header-left {
-            text-align: left;
-        }
-
-        .header-right {
-            text-align: right;
         }
 
         .header h1 {
@@ -61,20 +50,6 @@
         .header p {
             color: var(--text-secondary);
             font-size: 1rem;
-        }
-
-        .cache-info {
-            color: var(--text-secondary);
-            font-size: 0.85rem;
-            padding: 8px 12px;
-            background-color: var(--bg-secondary);
-            border-radius: 6px;
-            border: 1px solid var(--border);
-        }
-
-        .cache-info .time {
-            color: var(--success);
-            font-weight: 500;
         }
 
         .warning {
@@ -404,17 +379,8 @@
 </head>
 <body>
     <div class="header">
-        <div class="header-left">
-            <h1>M3U2STRM Manager</h1>
-            <p>Select your favorite content and manage your media library</p>
-        </div>
-        {% if cache_time %}
-        <div class="header-right">
-            <div class="cache-info">
-                Cache: <span class="time">{{ cache_time }}</span>
-            </div>
-        </div>
-        {% endif %}
+        <h1>M3U2STRM Manager</h1>
+        <p>Select your favorite content and manage your media library</p>
     </div>
 
     {% if error %}
