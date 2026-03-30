@@ -790,6 +790,53 @@ def log_system_catalog(items, output_dir):
         logger.error(f"Failed to write catalog file: {str(e)}")
 
 
+def prepare_ui_cache(items, output_dir, m3u_file, recent_limit=100):
+    """Prepare and save UI cache for fast page loads."""
+    cache_file = os.path.join(output_dir, ".ui_cache.json")
+
+    series_names = set()
+    movie_names = set()
+    live_channels = []
+
+    for item in items:
+        title = item.get("title", "")
+        group = item.get("group_title", "")
+
+        series_info = parse_series_info(title)
+        if series_info:
+            series_names.add(series_info["series_name"])
+        else:
+            if group.lower() in ["live", "live tv", "iptv"] or "live" in group.lower():
+                live_channels.append(
+                    {
+                        "title": title,
+                        "group_title": group,
+                        "tvg_logo": item.get("tvg_logo", ""),
+                    }
+                )
+            else:
+                movie_names.add(title)
+
+    recently_added = get_recently_added_items(m3u_file, recent_limit)
+
+    ui_cache = {
+        "series": sorted(series_names),
+        "movies": sorted(movie_names),
+        "live": live_channels,
+        "recently_added": recently_added,
+        "last_updated": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+    try:
+        with open(cache_file, "w", encoding="utf-8") as f:
+            json.dump(ui_cache, f, indent=2)
+        logger.debug(
+            f"UI cache updated: {len(series_names)} series, {len(movie_names)} movies, {len(live_channels)} live channels, {len(recently_added)} recently added"
+        )
+    except IOError as e:
+        logger.error(f"Failed to write UI cache file: {str(e)}")
+
+
 def get_recently_added_items(m3u_file, limit=100):
     """Get items sorted by highest URL ID (newest first)."""
     items = parse_m3u_file(m3u_file)
@@ -1009,12 +1056,12 @@ def run_task():
     # Parse and categorize M3U items
     items = parse_m3u_file(m3u_file)
 
-    # Get recently added items (for UI + optional notification)
-    recent_limit = int(os.getenv("RECENTLY_ADDED_LIMIT", "100"))
-    recent_items = get_recently_added_items(m3u_file, recent_limit)
-
     # Log all items to system catalog (before filtering)
     log_system_catalog(items, output_dir)
+
+    # Prepare UI cache for fast page loads
+    recent_limit = int(os.getenv("RECENTLY_ADDED_LIMIT", "100"))
+    prepare_ui_cache(items, output_dir, m3u_file, recent_limit)
 
     categorized_items = categorize_items(items)
 
