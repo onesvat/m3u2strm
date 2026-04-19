@@ -176,14 +176,13 @@ def toggle_item():
     return jsonify({"success": True, "selected": selected})
 
 
-@app.route("/update_filters", methods=["POST"])
-def update_filters():
-    # Get selected items from form
-    include_series = request.form.getlist("include_series")
-    include_movies = request.form.getlist("include_movies")
-    include_live = request.form.getlist("include_live")
+@app.route("/save_and_generate", methods=["POST"])
+def save_and_generate():
+    data = request.get_json()
+    include_series = data.get("series", [])
+    include_movies = data.get("movies", [])
+    include_live = data.get("live", [])
 
-    # Save to config file
     filters = {
         "series": include_series,
         "movies": include_movies,
@@ -191,8 +190,7 @@ def update_filters():
     }
     save_filters(filters)
 
-    # Redirect back to main page
-    return redirect(url_for("index"))
+    return jsonify({"success": True})
 
 
 def start_web_ui():

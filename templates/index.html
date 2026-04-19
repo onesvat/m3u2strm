@@ -394,7 +394,7 @@
     </div>
     {% endif %}
 
-    <form action="/update_filters" method="POST">
+    <form id="filtersForm" onsubmit="return false;">
         <div class="filters-container">
             <div class="filter-section">
                 <h2><span class="badge series">TV</span> Series</h2>
@@ -481,7 +481,7 @@
         </div>
 
         <div class="save-btn-container">
-            <button type="submit" class="btn btn-primary btn-save">Save Filters & Generate STRM Files</button>
+            <button type="button" class="btn btn-primary btn-save" onclick="saveAndGenerate()">Save Filters & Generate STRM Files</button>
         </div>
     </form>
 
@@ -601,6 +601,32 @@
             }
         }
 
+        function saveAndGenerate() {
+            const series = [...document.querySelectorAll('input[name="include_series"]:checked')].map(cb => cb.value);
+            const movies = [...document.querySelectorAll('input[name="include_movies"]:checked')].map(cb => cb.value);
+            const live = [...document.querySelectorAll('input[name="include_live"]:checked')].map(cb => cb.value);
+
+            const btn = document.querySelector('.btn-save');
+            const origText = btn.textContent;
+            btn.textContent = 'Saving...';
+            btn.disabled = true;
+
+            fetch('/save_and_generate', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({series, movies, live})
+            })
+            .then(response => response.json())
+            .then(data => {
+                btn.textContent = data.success ? 'Saved!' : 'Error!';
+                setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 2000);
+            })
+            .catch(error => {
+                btn.textContent = 'Error!';
+                setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 2000);
+            });
+        }
+
         function toggleItem(type, title, button) {
             fetch('/toggle_item', {
                 method: 'POST',
@@ -627,10 +653,13 @@
         }
 
         function syncFilterCheckbox(type, title, checked) {
-            const checkbox = document.querySelector(`input[name="include_${type}"][value="${title}"]`);
-            if (checkbox) {
-                checkbox.checked = checked;
-                updateItemStyle(checkbox);
+            const checkboxes = document.querySelectorAll(`input[name="include_${type}"]`);
+            for (const cb of checkboxes) {
+                if (cb.value === title) {
+                    cb.checked = checked;
+                    updateItemStyle(cb);
+                    break;
+                }
             }
         }
 
