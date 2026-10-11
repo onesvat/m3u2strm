@@ -1117,6 +1117,22 @@ def run_task():
             )
             send_telegram_notification(notification_message)
 
+        # --- Download queue integration ---
+        # After STRM files are created, scan for items to download
+        filters = web_ui.load_filters()
+        download_series = filters.get("download_series", [])
+        download_movies = filters.get("download_movies", [])
+
+        if download_series or download_movies:
+            try:
+                import downloader
+                download_filters = download_series + download_movies
+                enqueued = downloader.scan_and_enqueue(output_dir, download_filters)
+                if enqueued:
+                    logger.info(f"Triggered download for {enqueued} items")
+            except Exception as e:
+                logger.error(f"Download scanner failed: {e}")
+
         else:
             logger.info("No changes detected, all files are up to date.")
 
@@ -1171,6 +1187,8 @@ def ensure_config_directory():
             "series": [],
             "movies": [],
             "live": [],
+            "download_series": [],
+            "download_movies": [],
             "series_groups": [],
             "movies_groups": [],
             "live_groups": [],
@@ -1243,6 +1261,14 @@ if __name__ == "__main__":
 
         # Start the web UI
         start_web_ui_thread()
+
+        # Start download queue worker
+        try:
+            import downloader
+            downloader._queue.start()
+            logger.info("Download queue worker started")
+        except Exception as e:
+            logger.warning(f"Download queue failed to start: {e}")
 
         # Create initial directory structure
         output_dir = os.path.join(script_folder, "vods")

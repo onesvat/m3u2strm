@@ -387,6 +387,33 @@
     <div class="error">{{ error }}</div>
     {% endif %}
 
+    {% if download_status.current or download_status.queue %}
+    <div class="recently-added-section" style="margin-bottom: 30px;">
+        <h2><span class="fire">&#11015;&#65039;</span> Download Queue</h2>
+        {% if download_status.current %}
+        <div style="margin-bottom: 15px; padding: 15px; background: var(--bg-card); border-radius: 8px;">
+            <strong>Downloading:</strong> {{ download_status.current.display_name }}
+            <div style="margin-top: 8px; font-size: 0.9rem; color: var(--text-secondary);">
+                {% if download_status.current.total %}
+                {{ (download_status.current.downloaded / 1048576) | int }}MB / {{ (download_status.current.total / 1048576) | int }}MB
+                ({{ (download_status.current.downloaded / download_status.current.total * 100) | int }}%)
+                {% else %}
+                {{ (download_status.current.downloaded / 1048576) | int }}MB
+                {% endif %}
+                {% if download_status.current.speed %}
+                · {{ (download_status.current.speed / 1024) | int }} KB/s
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+        {% if download_status.queue %}
+        <div style="color: var(--text-secondary); font-size: 0.85rem;">
+            Queued: {{ download_status.queue | length }} item(s)
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+
     {% if not has_filters %}
     <div class="warning">
         <strong>Warning!</strong> You must select specific content to include - filtering is mandatory.
@@ -498,6 +525,13 @@
                         onclick="toggleItem('{{ item['content_type'] }}', '{{ item['title'] }}', this)">
                     {% if item['is_selected'] %}Selected{% else %}+ Add{% endif %}
                 </button>
+                {% if item['content_type'] != 'live' %}
+                <button class="toggle-btn dl-btn {% if item['is_download'] %}selected{% endif %}"
+                        style="top: 38px;"
+                        onclick="toggleDownload('{{ item['content_type'] }}', '{{ item['title'] }}', this)">
+                    {% if item['is_download'] %}DL ON{% else %}DL OFF{% endif %}
+                </button>
+                {% endif %}
                 
                 <span class="type-badge {{ item['content_type'] }}">
                     {% if item['content_type'] == 'movie' %}Movie{% endif %}
@@ -605,6 +639,12 @@
             const series = [...document.querySelectorAll('input[name="include_series"]:checked')].map(cb => cb.value);
             const movies = [...document.querySelectorAll('input[name="include_movies"]:checked')].map(cb => cb.value);
             const live = [...document.querySelectorAll('input[name="include_live"]:checked')].map(cb => cb.value);
+            const download_series = [...document.querySelectorAll('.dl-btn.selected')]
+                .filter(b => b.closest('.recent-card').dataset.type === 'series')
+                .map(b => b.closest('.recent-card').dataset.title);
+            const download_movies = [...document.querySelectorAll('.dl-btn.selected')]
+                .filter(b => b.closest('.recent-card').dataset.type === 'movie')
+                .map(b => b.closest('.recent-card').dataset.title);
 
             const btn = document.querySelector('.btn-save');
             const origText = btn.textContent;
@@ -614,7 +654,7 @@
             fetch('/save_and_generate', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({series, movies, live})
+                body: JSON.stringify({series, movies, live, download_series, download_movies})
             })
             .then(response => response.json())
             .then(data => {
@@ -683,6 +723,27 @@
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({type: type, title: title})
             });
+        }
+
+        function toggleDownload(type, title, button) {
+            fetch('/toggle_download', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({type: type, title: title})
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    if (data.download) {
+                        button.classList.add('selected');
+                        button.textContent = 'DL ON';
+                    } else {
+                        button.classList.remove('selected');
+                        button.textContent = 'DL OFF';
+                    }
+                }
+            })
+            .catch(error => console.error('Error:', error));
         }
 
         document.addEventListener('DOMContentLoaded', function() {

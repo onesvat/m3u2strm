@@ -23,12 +23,17 @@ def load_filters():
         "series": [],
         "movies": [],
         "live": [],
+        "download_series": [],
+        "download_movies": [],
     }
 
     if os.path.exists(FILTERS_FILE):
         try:
             with open(FILTERS_FILE, "r") as f:
                 filters = json.load(f)
+            # Ensure download keys exist for backward compat
+            filters.setdefault("download_series", [])
+            filters.setdefault("download_movies", [])
             logger.info(f"Loaded filters from {FILTERS_FILE}")
             return filters
         except Exception as e:
@@ -71,6 +76,8 @@ def index():
     include_series = filters.get("series", [])
     include_movies = filters.get("movies", [])
     include_live = filters.get("live", [])
+    download_series = filters.get("download_series", [])
+    download_movies = filters.get("download_movies", [])
 
     has_filters = bool(include_series or include_movies or include_live)
 
@@ -105,10 +112,20 @@ def index():
         for item in recently_added:
             if item["content_type"] == "series":
                 item["is_selected"] = item["title"] in include_series
+                item["is_download"] = item["title"] in download_series
             elif item["content_type"] == "movie":
                 item["is_selected"] = item["title"] in include_movies
+                item["is_download"] = item["title"] in download_movies
             else:
                 item["is_selected"] = item["title"] in include_live
+                item["is_download"] = False
+
+        # Get download queue status
+        try:
+            from downloader import get_status as dl_status
+            download_status = dl_status()
+        except Exception:
+            download_status = {"current": None, "queue": [], "running": False}
 
         return render_template(
             "index.html",
@@ -118,6 +135,9 @@ def index():
             include_series=include_series,
             include_movies=include_movies,
             include_live=include_live,
+            download_series=download_series,
+            download_movies=download_movies,
+            download_status=download_status,
             has_filters=has_filters,
             filters_mandatory=True,
             recently_added=recently_added,
@@ -176,18 +196,70 @@ def toggle_item():
     return jsonify({"success": True, "selected": selected})
 
 
+@app.route("/toggle_download", methods=["POST"])
+def toggle_download():
+    """Toggle download flag for a single item (AJAX)."""
+    data = request.get_json()
+    item_type = data.get("type")
+    item_title = data.get("title")
+
+    if not item_type or not item_title:
+        return jsonify({"success": False, "error": "Missing parameters"}), 400
+
+    type_map = {"series": "download_series", "movie": "download_movies"}
+    if item_type not in type_map:
+        return jsonify({"success": False, "error": "Invalid type"}), 400
+
+    filters = load_filters()
+    filter_key = type_map[item_type]
+
+    filter_list = filters.get(filter_key, [])
+    item_title_lower = item_title.lower()
+
+    found = False
+    for i, f in enumerate(filter_list):
+        if f.lower() == item_title_lower:
+            filters[filter_key].pop(i)
+            selected = False
+            found = True
+            break
+
+    if not found:
+        filters[filter_key].append(item_title)
+        selected = True
+
+    save_filters(filters, trigger_task=False)
+
+    return jsonify({"success": True, "download": selected})
+
+
+@app.route("/download_status", methods=["GET"])
+def download_status():
+    """Get current download queue status."""
+    try:
+        from downloader import get_status as dl_status
+        return jsonify(dl_status())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/save_and_generate", methods=["POST"])
 def save_and_generate():
     data = request.get_json()
     include_series = data.get("series", [])
     include_movies = data.get("movies", [])
     include_live = data.get("live", [])
+    download_series = data.get("download_series", [])
+    download_movies = data.get("download_movies", [])
 
-    filters = {
+    filters = load_filters()
+    filters.update({
         "series": include_series,
         "movies": include_movies,
         "live": include_live,
-    }
+        "download_series": download_series,
+        "download_movies": download_movies,
+    })
     save_filters(filters)
 
     return jsonify({"success": True})
