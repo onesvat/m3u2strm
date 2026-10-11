@@ -115,6 +115,15 @@ the Xtream `player_api.php` derived from `M3U_URL`).
 `DOWNLOAD_HOURS` uses the container's local time; mount `/etc/localtime`
 (see `docker-compose.yml`) or the hours are UTC.
 
+### Monitoring
+
+`GET /api/status` returns a JSON health document for monitoring tools such as
+a Home Assistant REST sensor: `ok`, a list of current `problems` (playlist not
+refreshed for a while, failed run, failed Jellyfin refresh, failed downloads
+in the last 24 h, downloads paused for disk space), the latest outcome of each
+operation, download progress and the most recent warning/error log lines.
+Provider credentials and bot tokens are masked there and in the container log.
+
 ## Web UI
 
 Access the web UI at `http://your-server-ip:8475` to:

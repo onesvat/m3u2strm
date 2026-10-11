@@ -210,12 +210,14 @@ class DownloadQueue:
             except Exception as e:
                 logger.error(f"Download completion hook failed: {e}")
 
-    def _record(self, job, result):
+    def _record(self, job, result, error=None):
         with self._lock:
             self._history.insert(0, {
                 "display_name": job.display_name,
                 "result": result,
+                "error": error,
                 "time": time.strftime("%Y-%m-%d %H:%M"),
+                "ts": time.time(),
             })
             del self._history[HISTORY_SIZE:]
             if result == "done":
@@ -268,7 +270,7 @@ class DownloadQueue:
                     time.sleep(RETRY_DELAY)
                     continue
                 self._failed_until[job.target_path] = time.time() + FAILED_BACKOFF
-                self._record(job, "failed")
+                self._record(job, "failed", str(e))
                 logger.error(f"Giving up on {job.display_name} for now")
                 return
             else:

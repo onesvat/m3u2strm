@@ -11,6 +11,7 @@ import threading
 from urllib.parse import urlparse, parse_qs
 import web_ui
 import downloader
+import health
 
 # Configure logging
 logging.basicConfig(
@@ -686,13 +687,16 @@ def send_telegram_notification(message):
 
         if response.status_code == 200 and response_data.get("ok"):
             logger.info("Successfully sent notification via Telegram")
+            health.record("telegram", True)
         else:
             logger.error(
                 f"Failed to send Telegram notification. Status code: {response.status_code}, Response: {response_data}"
             )
+            health.record("telegram", False, f"HTTP {response.status_code}")
 
     except Exception as e:
         logger.error(f"Error sending Telegram notification: {str(e)}")
+        health.record("telegram", False, e)
 
 
 def format_notification_message(new_series_details, new_movies_details, live_updated):
@@ -927,12 +931,15 @@ def download_from_url(url, destination):
             file.write(response.content)
 
         logger.info(f"Successfully downloaded M3U file to {destination}")
+        health.record("playlist", True, size=len(response.content))
         return True
     except requests.exceptions.RequestException as e:
         logger.error(f"Failed to download M3U file: {str(e)}")
+        health.record("playlist", False, e)
         return False
     except IOError as e:
         logger.error(f"Failed to save downloaded M3U file: {str(e)}")
+        health.record("playlist", False, e)
         return False
 
 
@@ -1002,10 +1009,12 @@ def refresh_jellyfin_libraries(updated_content_types):
         logger.info(
             f"Successfully triggered Jellyfin library refresh for: {', '.join(updated_content_types)}"
         )
+        health.record("jellyfin", True)
         return True
 
     except Exception as e:
         logger.error(f"Error refreshing Jellyfin libraries: {str(e)}")
+        health.record("jellyfin", False, e)
         # Add more detailed debug info for network errors
         if isinstance(e, requests.exceptions.RequestException):
             logger.debug(
@@ -1236,6 +1245,16 @@ def start_download_worker():
     downloader.queue.start()
 
 
+def run_task_safely():
+    """Run once; record the outcome instead of letting an error stop the loop."""
+    try:
+        run_task()
+        health.record("run", True)
+    except Exception as e:
+        logger.error(f"Task run failed: {e}", exc_info=True)
+        health.record("run", False, e)
+
+
 # Start the web UI in a separate thread
 def start_web_ui_thread():
     # Try to find or download M3U file before starting the web UI
@@ -1265,7 +1284,7 @@ def rerun_task():
     if current_time - last_run_time > 10:
         last_run_time = current_time
         # Run in a separate thread to not block the web UI
-        task_thread = threading.Thread(target=lambda: run_task())
+        task_thread = threading.Thread(target=run_task_safely)
         task_thread.daemon = True
         task_thread.start()
         return True
@@ -1363,6 +1382,8 @@ if __name__ == "__main__":
         )
         logger.debug(f"M3U_URL environment variable: {os.getenv('M3U_URL', 'not set')}")
 
+        health.install_logging()
+
         # Ensure config directory exists and migrate env vars if needed
         ensure_config_directory()
 
@@ -1380,7 +1401,7 @@ if __name__ == "__main__":
         logger.info(f"Task will run every {INTERVAL} minutes")
 
         while True:
-            run_task()
+            run_task_safely()
 
             logger.info(f"Sleeping for {INTERVAL} minutes")
             time.sleep(INTERVAL * 60)

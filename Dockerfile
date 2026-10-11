@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY task.py .
 COPY web_ui.py .
 COPY downloader.py .
+COPY health.py .
 COPY requirements.txt .
 COPY templates templates
 

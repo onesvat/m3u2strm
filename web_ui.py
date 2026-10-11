@@ -237,6 +237,15 @@ def download_status():
     return jsonify(queue.status())
 
 
+@app.route("/api/status", methods=["GET"])
+def api_status():
+    """Health and download status for monitoring (e.g. Home Assistant)."""
+    import health
+    from downloader import queue
+
+    return jsonify(health.snapshot(queue.status()))
+
+
 @app.route("/save_and_generate", methods=["POST"])
 def save_and_generate():
     data = request.get_json()
