@@ -61,6 +61,7 @@ python task.py
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `M3U_URL` | URL to download M3U playlist | `http://provider.com/playlist.m3u` |
+| `M3U_USER_AGENT` | User-Agent for the playlist download (default `VLC/3.0.20 LibVLC/3.0.20`) | `curl/8.0` |
 | `M3U_FILE` | Path to local M3U file (alternative to URL) | `/path/to/playlist.m3u` |
 
 ### Content Groups

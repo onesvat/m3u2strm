@@ -61,8 +61,12 @@ class LiveTVItem(M3UItem):
         super().__init__(title, url, group_title, **kwargs)
 
 
+# Some providers reject the default python-requests User-Agent with 403
+USER_AGENT = os.getenv("M3U_USER_AGENT", "VLC/3.0.20 LibVLC/3.0.20")
+
+
 def download_m3u_file(url, destination):
-    response = requests.get(url)
+    response = requests.get(url, headers={"User-Agent": USER_AGENT})
     if response.status_code == 200:
         with open(destination, "wb") as file:
             file.write(response.content)
@@ -896,7 +900,7 @@ def download_from_url(url, destination):
     """Download an M3U file from a URL."""
     try:
         logger.info(f"Downloading M3U file from {url} to {destination}")
-        response = requests.get(url, timeout=30)
+        response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
         response.raise_for_status()  # Raise an exception for HTTP errors
 
         with open(destination, "wb") as file:
@@ -963,7 +967,8 @@ def refresh_jellyfin_libraries(updated_content_types):
         jellyfin_url = jellyfin_url.rstrip("/")
 
         headers = {
-            "X-MediaBrowser-Token": jellyfin_api_key,  # Use X-MediaBrowser-Token for compatibility
+            # Newer Jellyfin releases only accept the Authorization header
+            "Authorization": f'MediaBrowser Token="{jellyfin_api_key}"',
             "Content-Type": "application/json",
         }
 
