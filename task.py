@@ -1373,6 +1373,8 @@ def ensure_config_directory():
 
 if __name__ == "__main__":
     try:
+        health.install_logging()
+
         # Log system information
         script_folder = os.path.dirname(os.path.abspath(__file__))
         logger.info(f"Starting application from {script_folder}")
@@ -1381,8 +1383,6 @@ if __name__ == "__main__":
             f"M3U_FILE environment variable: {os.getenv('M3U_FILE', 'not set')}"
         )
         logger.debug(f"M3U_URL environment variable: {os.getenv('M3U_URL', 'not set')}")
-
-        health.install_logging()
 
         # Ensure config directory exists and migrate env vars if needed
         ensure_config_directory()
