@@ -209,6 +209,60 @@
             font-weight: 500;
         }
 
+        .dl-toggle {
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+            line-height: 1;
+            background-color: rgba(255, 255, 255, 0.1);
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
+
+        .dl-toggle:hover { background-color: rgba(255, 255, 255, 0.25); }
+
+        .dl-toggle.selected {
+            background-color: var(--warning);
+            color: #1a1a2e;
+        }
+
+        .recent-card .dl-toggle {
+            position: absolute;
+            top: 38px;
+            left: 10px;
+            z-index: 10;
+        }
+
+        #download-panel .download-current {
+            margin-bottom: 15px;
+            padding: 15px;
+            background: var(--bg-card);
+            border-radius: 8px;
+        }
+
+        #download-panel .download-meta,
+        #download-panel .download-list {
+            margin-top: 8px;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        #download-panel .progress {
+            height: 6px;
+            margin-top: 8px;
+            border-radius: 3px;
+            background-color: var(--bg-primary);
+            overflow: hidden;
+        }
+
+        #download-panel .progress div {
+            height: 100%;
+            background-color: var(--warning);
+        }
+
         .save-btn-container {
             text-align: center;
             margin-bottom: 40px;
@@ -387,32 +441,10 @@
     <div class="error">{{ error }}</div>
     {% endif %}
 
-    {% if download_status.current or download_status.queue %}
-    <div class="recently-added-section" style="margin-bottom: 30px;">
-        <h2><span class="fire">&#11015;&#65039;</span> Download Queue</h2>
-        {% if download_status.current %}
-        <div style="margin-bottom: 15px; padding: 15px; background: var(--bg-card); border-radius: 8px;">
-            <strong>Downloading:</strong> {{ download_status.current.display_name }}
-            <div style="margin-top: 8px; font-size: 0.9rem; color: var(--text-secondary);">
-                {% if download_status.current.total %}
-                {{ (download_status.current.downloaded / 1048576) | int }}MB / {{ (download_status.current.total / 1048576) | int }}MB
-                ({{ (download_status.current.downloaded / download_status.current.total * 100) | int }}%)
-                {% else %}
-                {{ (download_status.current.downloaded / 1048576) | int }}MB
-                {% endif %}
-                {% if download_status.current.speed %}
-                · {{ (download_status.current.speed / 1024) | int }} KB/s
-                {% endif %}
-            </div>
-        </div>
-        {% endif %}
-        {% if download_status.queue %}
-        <div style="color: var(--text-secondary); font-size: 0.85rem;">
-            Queued: {{ download_status.queue | length }} item(s)
-        </div>
-        {% endif %}
+    <div class="recently-added-section" id="download-panel" style="display: none; margin-bottom: 30px;">
+        <h2><span class="fire">&#11015;&#65039;</span> Downloads</h2>
+        <div id="download-body"></div>
     </div>
-    {% endif %}
 
     {% if not has_filters %}
     <div class="warning">
@@ -443,6 +475,9 @@
                             <span class="selected-badge">Selected</span>
                             {% endif %}
                         </label>
+                        <button type="button" class="dl-toggle {% if series in download_series %}selected{% endif %}"
+                                data-type="series" data-title="{{ series }}"
+                                onclick="toggleDownload('series', this.dataset.title)">&#11015; {% if series in download_series %}On{% else %}Off{% endif %}</button>
                     </div>
                     {% endfor %}
                 </div>
@@ -468,6 +503,9 @@
                             <span class="selected-badge">Selected</span>
                             {% endif %}
                         </label>
+                        <button type="button" class="dl-toggle {% if movie in download_movies %}selected{% endif %}"
+                                data-type="movie" data-title="{{ movie }}"
+                                onclick="toggleDownload('movie', this.dataset.title)">&#11015; {% if movie in download_movies %}On{% else %}Off{% endif %}</button>
                     </div>
                     {% endfor %}
                 </div>
@@ -526,11 +564,9 @@
                     {% if item['is_selected'] %}Selected{% else %}+ Add{% endif %}
                 </button>
                 {% if item['content_type'] != 'live' %}
-                <button class="toggle-btn dl-btn {% if item['is_download'] %}selected{% endif %}"
-                        style="top: 38px;"
-                        onclick="toggleDownload('{{ item['content_type'] }}', '{{ item['title'] }}', this)">
-                    {% if item['is_download'] %}DL ON{% else %}DL OFF{% endif %}
-                </button>
+                <button type="button" class="dl-toggle {% if item['is_download'] %}selected{% endif %}"
+                        data-type="{{ item['content_type'] }}" data-title="{{ item['title'] }}"
+                        onclick="toggleDownload(this.dataset.type, this.dataset.title)">&#11015; {% if item['is_download'] %}On{% else %}Off{% endif %}</button>
                 {% endif %}
                 
                 <span class="type-badge {{ item['content_type'] }}">
@@ -639,12 +675,6 @@
             const series = [...document.querySelectorAll('input[name="include_series"]:checked')].map(cb => cb.value);
             const movies = [...document.querySelectorAll('input[name="include_movies"]:checked')].map(cb => cb.value);
             const live = [...document.querySelectorAll('input[name="include_live"]:checked')].map(cb => cb.value);
-            const download_series = [...document.querySelectorAll('.dl-btn.selected')]
-                .filter(b => b.closest('.recent-card').dataset.type === 'series')
-                .map(b => b.closest('.recent-card').dataset.title);
-            const download_movies = [...document.querySelectorAll('.dl-btn.selected')]
-                .filter(b => b.closest('.recent-card').dataset.type === 'movie')
-                .map(b => b.closest('.recent-card').dataset.title);
 
             const btn = document.querySelector('.btn-save');
             const origText = btn.textContent;
@@ -654,7 +684,7 @@
             fetch('/save_and_generate', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({series, movies, live, download_series, download_movies})
+                body: JSON.stringify({series, movies, live})
             })
             .then(response => response.json())
             .then(data => {
@@ -725,7 +755,7 @@
             });
         }
 
-        function toggleDownload(type, title, button) {
+        function toggleDownload(type, title) {
             fetch('/toggle_download', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -733,15 +763,72 @@
             })
             .then(response => response.json())
             .then(data => {
-                if (data.success) {
-                    if (data.download) {
+                if (!data.success) return;
+                document.querySelectorAll('.dl-toggle').forEach(button => {
+                    if (button.dataset.type === type && button.dataset.title === title) {
+                        button.classList.toggle('selected', data.download);
+                        button.textContent = data.download ? '\u2B07 On' : '\u2B07 Off';
+                    }
+                });
+                if (data.selected) {
+                    // Enabling a download also includes the title
+                    syncFilterCheckbox(type === 'movie' ? 'movies' : 'series', title, true);
+                    const card = document.querySelector(`.recent-card[data-type="${type}"][data-title="${CSS.escape(title)}"]`);
+                    if (card) {
+                        const button = card.querySelector('.toggle-btn');
+                        card.classList.add('selected');
                         button.classList.add('selected');
-                        button.textContent = 'DL ON';
-                    } else {
-                        button.classList.remove('selected');
-                        button.textContent = 'DL OFF';
+                        button.textContent = 'Selected';
                     }
                 }
+                refreshDownloads();
+            })
+            .catch(error => console.error('Error:', error));
+        }
+
+        function formatSize(bytes) {
+            return bytes >= 1073741824 ? (bytes / 1073741824).toFixed(1) + ' GB' : Math.round(bytes / 1048576) + ' MB';
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function refreshDownloads() {
+            fetch('/download_status')
+            .then(response => response.json())
+            .then(status => {
+                const panel = document.getElementById('download-panel');
+                const body = document.getElementById('download-body');
+                const busy = status.current || status.queue.length;
+                if (!busy && !status.history.length) {
+                    panel.style.display = 'none';
+                    return;
+                }
+                panel.style.display = '';
+
+                let html = `<div class="download-meta">${escapeHtml(status.state)}</div>`;
+                if (status.current) {
+                    const c = status.current;
+                    const pct = c.total ? Math.floor(c.downloaded / c.total * 100) : 0;
+                    html += `<div class="download-current"><strong>${escapeHtml(c.display_name)}</strong>
+                        <div class="download-meta">${formatSize(c.downloaded)}${c.total ? ' / ' + formatSize(c.total) + ` (${pct}%)` : ''}
+                        ${c.speed ? ' &middot; ' + formatSize(c.speed) + '/s' : ''}</div>
+                        <div class="progress"><div style="width: ${pct}%"></div></div></div>`;
+                }
+                if (status.queue.length) {
+                    const shown = status.queue.slice(0, 5).map(escapeHtml).join(', ');
+                    const more = status.queue.length > 5 ? ` and ${status.queue.length - 5} more` : '';
+                    html += `<div class="download-list">Queued (${status.queue.length}): ${shown}${more}</div>`;
+                }
+                if (status.history.length) {
+                    const recent = status.history.slice(0, 5)
+                        .map(h => `${escapeHtml(h.display_name)} ${h.result === 'done' ? '&#10003;' : '&#10007;'}`).join(', ');
+                    html += `<div class="download-list">Recent: ${recent}</div>`;
+                }
+                body.innerHTML = html;
             })
             .catch(error => console.error('Error:', error));
         }
@@ -750,6 +837,8 @@
             setupSearch('seriesSearch', 'series-item');
             setupSearch('moviesSearch', 'movies-item');
             setupSearch('liveSearch', 'live-item');
+            refreshDownloads();
+            setInterval(refreshDownloads, 5000);
         });
     </script>
 </body>

@@ -8,7 +8,9 @@ import hashlib
 import json
 import logging
 import threading
+from urllib.parse import urlparse, parse_qs
 import web_ui
+import downloader
 
 # Configure logging
 logging.basicConfig(
@@ -48,6 +50,8 @@ class SeriesItem(M3UItem):
         self.season = season
         self.episode = episode
         self.series_name = series_name
+        # series_name may get a group suffix for duplicates; keep the filter name
+        self.base_series_name = series_name
 
 
 class MovieItem(M3UItem):
@@ -417,6 +421,14 @@ def create_strm_files_for_series(series_items, base_path, checksums=None):
                 # Create STRM file for episode
                 episode_filename = f"{safe_series_name} S{episode.season:02d}E{episode.episode:02d}.strm"
                 strm_path = os.path.join(season_dir, episode_filename)
+                episode.strm_path = strm_path
+
+                if downloader.downloaded_file_for(strm_path):
+                    # Local copy exists; a .strm next to it would duplicate the episode
+                    if os.path.exists(strm_path):
+                        os.remove(strm_path)
+                    unchanged_count += 1
+                    continue
 
                 # Check if content has changed
                 content_hash = calculate_content_hash(episode.url)
@@ -523,6 +535,14 @@ def create_strm_files_for_movies(movie_items, base_path, checksums=None):
 
         # Create STRM file
         strm_path = os.path.join(movie_dir, f"{safe_folder_name}.strm")
+        movie.strm_path = strm_path
+
+        if downloader.downloaded_file_for(strm_path):
+            # Local copy exists; a .strm next to it would duplicate the movie
+            if os.path.exists(strm_path):
+                os.remove(strm_path)
+            unchanged_count += 1
+            continue
 
         # Check if content has changed
         content_hash = calculate_content_hash(movie.url)
@@ -1035,6 +1055,7 @@ def run_task():
         logger.warning(
             "Please update your filters in the web UI to include specific content."
         )
+        downloader.queue.sync([])
         return
 
     # Print summary of categorized items
@@ -1117,24 +1138,102 @@ def run_task():
             )
             send_telegram_notification(notification_message)
 
-        # --- Download queue integration ---
-        # After STRM files are created, scan for items to download
-        filters = web_ui.load_filters()
-        download_series = filters.get("download_series", [])
-        download_movies = filters.get("download_movies", [])
+    else:
+        logger.info("No changes detected, all files are up to date.")
 
-        if download_series or download_movies:
-            try:
-                import downloader
-                download_filters = download_series + download_movies
-                enqueued = downloader.scan_and_enqueue(output_dir, download_filters)
-                if enqueued:
-                    logger.info(f"Triggered download for {enqueued} items")
-            except Exception as e:
-                logger.error(f"Download scanner failed: {e}")
+    # Queue selected titles for download (also when nothing changed)
+    downloader.queue.sync(download_jobs(categorized_items))
 
-        else:
-            logger.info("No changes detected, all files are up to date.")
+
+def download_jobs(categorized_items):
+    """Download jobs for filtered items whose title is in the download lists."""
+    filters = web_ui.load_filters()
+    wanted_series = {s.lower() for s in filters.get("download_series", [])}
+    wanted_movies = {m.lower() for m in filters.get("download_movies", [])}
+
+    jobs = []
+    for item in categorized_items["series"]:
+        if item.base_series_name.lower() in wanted_series and getattr(item, "strm_path", None):
+            name = f"{item.series_name} S{item.season:02d}E{item.episode:02d}"
+            key = (item.series_name, item.season, item.episode)
+            jobs.append((key, downloader.Job(item.strm_path, item.url, name)))
+    for item in categorized_items["movies"]:
+        if item.title.lower() in wanted_movies and getattr(item, "strm_path", None):
+            jobs.append(((item.title, 0, 0), downloader.Job(item.strm_path, item.url, item.title)))
+    # Series download in episode order
+    jobs.sort(key=lambda pair: pair[0])
+    return [job for _, job in jobs]
+
+
+def jellyfin_request(path):
+    jellyfin_url = os.getenv("JELLYFIN_URL", "").rstrip("/")
+    jellyfin_api_key = os.getenv("JELLYFIN_API_KEY")
+    if not jellyfin_url or not jellyfin_api_key:
+        return None
+    response = requests.get(
+        f"{jellyfin_url}{path}",
+        headers={"Authorization": f'MediaBrowser Token="{jellyfin_api_key}"'},
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def provider_connections():
+    """(active, max) connections from the Xtream API behind M3U_URL, or None."""
+    m3u_url = os.getenv("M3U_URL", "")
+    parsed = urlparse(m3u_url)
+    query = parse_qs(parsed.query)
+    if not query.get("username") or not query.get("password"):
+        return None
+    response = requests.get(
+        f"{parsed.scheme}://{parsed.netloc}/player_api.php",
+        params={"username": query["username"][0], "password": query["password"][0]},
+        headers={"User-Agent": USER_AGENT},
+        timeout=10,
+    )
+    response.raise_for_status()
+    info = response.json().get("user_info", {})
+    return int(info.get("active_cons", 0)), int(info.get("max_connections", 1))
+
+
+def download_busy_reason(downloading):
+    """Why the download should yield the provider connection, or None."""
+    sessions = jellyfin_request("/Sessions?activeWithinSeconds=60") or []
+    for session in sessions:
+        item = session.get("NowPlayingItem")
+        if not item:
+            continue
+        path = item.get("Path") or ""
+        if item.get("Type") == "TvChannel" or path.endswith(".strm") or "://" in path:
+            return f"Jellyfin is streaming {item.get('Name', '')}".strip()
+
+    # Our own download counts as a connection, so only check before starting
+    if not downloading:
+        connections = provider_connections()
+        if connections and connections[0] >= connections[1]:
+            return f"provider connections in use ({connections[0]}/{connections[1]})"
+    return None
+
+
+def on_downloads_finished(names):
+    refresh_jellyfin_libraries(["downloads"])
+    message = "⬇️ <b>Downloaded</b>\n\n" + "\n".join(f"• {n}" for n in names[:20])
+    if len(names) > 20:
+        message += f"\n• and {len(names) - 20} more..."
+    send_telegram_notification(message)
+
+
+def start_download_worker():
+    downloader.queue.configure(
+        user_agent=USER_AGENT,
+        hours=os.getenv("DOWNLOAD_HOURS", ""),
+        min_free_gb=os.getenv("DOWNLOAD_MIN_FREE_GB", "20"),
+        speed_limit_kbps=os.getenv("DOWNLOAD_SPEED_LIMIT_KBPS", "0"),
+        busy_check=download_busy_reason,
+        on_batch_done=on_downloads_finished,
+    )
+    downloader.queue.start()
 
 
 # Start the web UI in a separate thread
@@ -1153,6 +1252,7 @@ def start_web_ui_thread():
 
 # Global variable to store the last time the task was run
 last_run_time = 0
+deferred_run = None
 
 
 # Function to rerun the task
@@ -1170,7 +1270,14 @@ def rerun_task():
         task_thread.start()
         return True
     else:
-        logger.warning("Task run requested but rejected (ran too recently)")
+        # Run once the cooldown is over so quick successive UI changes are not lost
+        global deferred_run
+        if deferred_run is None or not deferred_run.is_alive():
+            delay = 10 - (current_time - last_run_time) + 1
+            logger.info(f"Task ran recently, rerunning in {delay:.0f}s")
+            deferred_run = threading.Timer(delay, rerun_task)
+            deferred_run.daemon = True
+            deferred_run.start()
         return False
 
 
@@ -1262,13 +1369,7 @@ if __name__ == "__main__":
         # Start the web UI
         start_web_ui_thread()
 
-        # Start download queue worker
-        try:
-            import downloader
-            downloader._queue.start()
-            logger.info("Download queue worker started")
-        except Exception as e:
-            logger.warning(f"Download queue failed to start: {e}")
+        start_download_worker()
 
         # Create initial directory structure
         output_dir = os.path.join(script_folder, "vods")

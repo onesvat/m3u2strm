@@ -12,8 +12,10 @@ services:
       - RECENTLY_ADDED_LIMIT=100
       - DEBUG_LOGGING=false
       - WEB_UI_PORT=8475 
+      - DOWNLOAD_HOURS=01-08
     ports:
       - "8475:8475"
     volumes:
       - ./data:/app/vods
+      - /etc/localtime:/etc/localtime:ro
     restart: unless-stopped

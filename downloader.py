@@ -1,352 +1,347 @@
-"""Downloader for m3u2strm — downloads .mkv files from .strm URLs.
+"""Download queue for m3u2strm: turns selected .strm entries into local files.
 
-Single-threaded sequential download queue. Reads URLs from .strm files,
-follows 302 redirects to CDN, downloads with resume support.
-On completion: deletes .strm, keeps .mkv.
+One file at a time, because IPTV accounts usually allow a single connection.
+Downloads go to "<name>.<ext>.part" and are resumed with Range requests; on
+success the file is renamed and the matching .strm is removed. The worker
+pauses (keeping the .part file) outside DOWNLOAD_HOURS, when free disk space
+is low, or when the busy check reports that someone else needs the
+connection (e.g. Jellyfin is playing a stream).
 """
 
 import os
+import shutil
+import threading
 import time
 import logging
-import threading
-from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 
 logger = logging.getLogger(__name__)
 
-CHUNK_SIZE = 1024 * 1024  # 1MB chunks
-MAX_RETRIES = 5
-RETRY_DELAY = 10  # seconds between retries
-SPEED_LIMIT_KBPS = None  # no limit by default, set to throttle
+VIDEO_EXTENSIONS = (".mkv", ".mp4", ".avi", ".ts", ".m4v")
+CHUNK_SIZE = 1024 * 1024
+CHECK_INTERVAL = 15  # seconds between pause checks while downloading
+IDLE_INTERVAL = 30  # seconds between checks while waiting
+MAX_ATTEMPTS = 5
+RETRY_DELAY = 30
+FAILED_BACKOFF = 60 * 60  # skip a failed file for an hour
+HISTORY_SIZE = 20
 
 
-class DownloadItem:
-    """A single download item with state tracking."""
+def media_extension(url):
+    """Container extension from the stream URL, defaulting to .mkv."""
+    ext = os.path.splitext(urlparse(url).path)[1].lower()
+    return ext if ext in VIDEO_EXTENSIONS else ".mkv"
 
-    def __init__(self, strm_path: str, mkv_path: str, url: str):
+
+def downloaded_file_for(strm_path):
+    """Return the downloaded media file next to a .strm path, if any."""
+    stem = os.path.splitext(strm_path)[0]
+    for ext in VIDEO_EXTENSIONS:
+        if os.path.exists(stem + ext):
+            return stem + ext
+    return None
+
+
+def parse_hours(value):
+    """Parse "HH-HH" (end exclusive, may wrap midnight). Empty = always."""
+    value = (value or "").strip()
+    if not value:
+        return None
+    start, end = value.split("-")
+    return int(start) % 24, int(end) % 24
+
+
+def in_window(hours, now=None):
+    if hours is None:
+        return True
+    start, end = hours
+    hour = (now or time.localtime()).tm_hour
+    if start == end:
+        return True
+    if start < end:
+        return start <= hour < end
+    return hour >= start or hour < end
+
+
+class Job:
+    def __init__(self, strm_path, url, display_name):
         self.strm_path = strm_path
-        self.mkv_path = mkv_path
         self.url = url
-        self.part_path = mkv_path + ".part"
-        self.status: str = "queued"          # queued | downloading | done | failed
-        self.downloaded: int = 0
-        self.total: int = 0
-        self.error: str | None = None
-        self.speed: float = 0.0
-        self.display_name = os.path.basename(mkv_path).replace(".mkv", "")
+        self.display_name = display_name
+        self.target_path = os.path.splitext(strm_path)[0] + media_extension(url)
+        self.part_path = self.target_path + ".part"
+        self.downloaded = 0
+        self.total = 0
+        self.speed = 0.0
+
+    def to_dict(self):
+        return {
+            "display_name": self.display_name,
+            "downloaded": self.downloaded,
+            "total": self.total,
+            "speed": self.speed,
+        }
+
+
+class Paused(Exception):
+    pass
+
+
+class Cancelled(Exception):
+    pass
 
 
 class DownloadQueue:
-    """Thread-safe single-item-at-a-time download queue."""
-
     def __init__(self):
         self._lock = threading.Lock()
-        self._queue: list[DownloadItem] = []
-        self._current: DownloadItem | None = None
-        self._running = False
-        self._thread: threading.Thread | None = None
+        self._wake = threading.Event()
+        self._queue = []
+        self._current = None
+        self._cancel_current = False
+        self._failed_until = {}
+        self._history = []
+        self._completed_batch = []
+        self._state = "idle"
+        self._thread = None
 
-    @property
-    def current(self) -> DownloadItem | None:
-        return self._current
+        self.user_agent = "VLC/3.0.20 LibVLC/3.0.20"
+        self.hours = None
+        self.min_free_bytes = 0
+        self.speed_limit = 0  # bytes per second, 0 = unlimited
+        self.busy_check = None  # callable(downloading) -> reason string or None
+        self.on_batch_done = None  # callable(list of display names)
 
-    @property
-    def queue(self) -> list[DownloadItem]:
-        with self._lock:
-            return list(self._queue)
-
-    @property
-    def running(self) -> bool:
-        return self._running
-
-    def enqueue(self, item: DownloadItem):
-        with self._lock:
-            # Avoid duplicates
-            for existing in self._queue:
-                if existing.mkv_path == item.mkv_path:
-                    return
-            if self._current and self._current.mkv_path == item.mkv_path:
-                return
-            self._queue.append(item)
-            logger.info(f"Enqueued: {item.display_name}")
-
-    def _pop_next(self) -> DownloadItem | None:
-        with self._lock:
-            if self._queue:
-                return self._queue.pop(0)
-            return None
+    def configure(self, user_agent=None, hours="", min_free_gb=20,
+                  speed_limit_kbps=0, busy_check=None, on_batch_done=None):
+        if user_agent:
+            self.user_agent = user_agent
+        self.hours = parse_hours(hours)
+        self.min_free_bytes = int(float(min_free_gb) * 1024 ** 3)
+        self.speed_limit = int(float(speed_limit_kbps) * 1024)
+        self.busy_check = busy_check
+        self.on_batch_done = on_batch_done
 
     def start(self):
-        if self._running:
+        if self._thread and self._thread.is_alive():
             return
-        self._running = True
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
-        logger.info("Download queue worker started")
+        logger.info("Download worker started")
 
-    def _worker(self):
-        while self._running:
-            item = self._pop_next()
-            if item is None:
-                time.sleep(5)
+    def sync(self, jobs):
+        """Replace the pending queue with jobs; cancel the current one if it was dropped."""
+        now = time.time()
+        pending = []
+        seen = set()
+        for job in jobs:
+            if job.target_path in seen or os.path.exists(job.target_path):
                 continue
+            if self._failed_until.get(job.target_path, 0) > now:
+                continue
+            seen.add(job.target_path)
+            pending.append(job)
 
-            self._current = item
-            self._download_one(item)
-            self._current = None
-
-    def _download_one(self, item: DownloadItem):
-        """Download a single item with retry logic."""
-        item.status = "downloading"
-
-        # Check if .mkv already exists (already downloaded)
-        if os.path.exists(item.mkv_path):
-            mkv_size = os.path.getsize(item.mkv_path)
-            if mkv_size > 0:
-                logger.info(f"Already downloaded: {item.display_name} ({mkv_size} bytes)")
-                item.status = "done"
-                self._cleanup_strm(item)
-                return
-            else:
-                os.remove(item.mkv_path)
-
-        # Check for partial download
-        if os.path.exists(item.part_path):
-            item.downloaded = os.path.getsize(item.part_path)
-            logger.info(f"Resuming from {item.downloaded} bytes: {item.display_name}")
-        else:
-            item.downloaded = 0
-
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                self._do_download(item, attempt)
-                # Success
-                item.status = "done"
-                self._cleanup_strm(item)
-                logger.info(f"Downloaded: {item.display_name} ({item.total} bytes)")
-                return
-            except requests.exceptions.RequestException as e:
-                item.error = str(e)
-                logger.warning(f"Attempt {attempt}/{MAX_RETRIES} failed: {e}")
-                if attempt < MAX_RETRIES:
-                    time.sleep(RETRY_DELAY)
+        with self._lock:
+            current = self._current
+            if current is not None:
+                if current.target_path in seen:
+                    pending = [j for j in pending if j.target_path != current.target_path]
                 else:
-                    item.status = "failed"
-                    logger.error(f"Failed after {MAX_RETRIES} attempts: {item.display_name}")
+                    self._cancel_current = True
+            self._queue = pending
 
-    def _do_download(self, item: DownloadItem, attempt: int):
-        """Core download logic — GET with redirect, Range header for resume."""
-        session = requests.Session()
+        if pending:
+            logger.info(f"Download queue: {len(pending)} pending")
+        self._wake.set()
+        return len(pending)
 
-        # First request: gateway URL → 302 → CDN URL with token
-        headers = {}
-        if item.downloaded > 0:
-            headers["Range"] = f"bytes={item.downloaded}-"
-
-        resp = session.get(item.url, headers=headers, stream=True, timeout=30)
-
-        if resp.status_code == 302:
-            # Gateway redirect — follow to CDN
-            cdn_url = resp.headers["Location"]
-            resp.close()
-            # Re-request on CDN with the same headers
-            resp = session.get(cdn_url, headers=headers, stream=True, timeout=60)
-
-        if resp.status_code == 416:
-            # Range Not Satisfiable — file might be complete already
-            resp.close()
-            part_size = os.path.getsize(item.part_path)
-            if part_size > 0:
-                os.rename(item.part_path, item.mkv_path)
-                item.total = part_size
-                return
-            raise requests.exceptions.RequestException("HTTP 416 with zero partial")
-
-        if resp.status_code not in (200, 206):
-            resp.close()
-            raise requests.exceptions.RequestException(
-                f"HTTP {resp.status_code} from CDN"
-            )
-
-        # Determine total size
-        if "Content-Range" in resp.headers:
-            # "bytes X-Y/Z" → Z is total
-            item.total = int(resp.headers["Content-Range"].split("/")[-1])
-        elif "Content-Length" in resp.headers:
-            item.total = int(resp.headers["Content-Length"])
-        else:
-            item.total = 0  # unknown
-
-        # Open file for append (resume) or write
-        mode = "ab" if item.downloaded > 0 and resp.status_code == 206 else "wb"
-        start_time = time.time()
-        last_log = start_time
-
-        with open(item.part_path, mode) as f:
-            for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
-                if chunk:
-                    f.write(chunk)
-                    item.downloaded += len(chunk)
-
-                    # Speed limiting
-                    if SPEED_LIMIT_KBPS:
-                        elapsed = time.time() - start_time
-                        target_bytes = elapsed * (SPEED_LIMIT_KBPS * 1024)
-                        if item.downloaded > target_bytes:
-                            sleep_time = (
-                                item.downloaded - target_bytes
-                            ) / (SPEED_LIMIT_KBPS * 1024)
-                            time.sleep(sleep_time)
-
-                    # Log progress every 30s
-                    now = time.time()
-                    if now - last_log >= 30:
-                        item.speed = item.downloaded / (now - start_time)
-                        pct = (
-                            f"{item.downloaded / item.total * 100:.0f}%"
-                            if item.total
-                            else "?"
-                        )
-                        logger.info(
-                            f"{item.display_name}: {pct} "
-                            f"({item.downloaded / 1024 / 1024:.0f}MB"
-                            + (
-                                f"/{item.total / 1024 / 1024:.0f}MB"
-                                if item.total
-                                else ""
-                            )
-                            + f", {item.speed / 1024:.0f} KB/s)"
-                        )
-                        last_log = now
-
-        resp.close()
-
-        # Verify file size if total known
-        if item.total > 0 and os.path.getsize(item.part_path) < item.total:
-            raise requests.exceptions.RequestException(
-                f"Incomplete download: {os.path.getsize(item.part_path)}/{item.total}"
-            )
-
-        # Atomic rename
-        os.rename(item.part_path, item.mkv_path)
-
-    def _cleanup_strm(self, item: DownloadItem):
-        """Delete the .strm file after successful download."""
-        try:
-            if os.path.exists(item.strm_path):
-                os.remove(item.strm_path)
-                logger.debug(f"Removed strm: {item.strm_path}")
-        except OSError as e:
-            logger.warning(f"Failed to remove strm {item.strm_path}: {e}")
-
-    def get_status(self) -> dict:
-        """Return full status for API."""
-        current = None
-        if self._current:
-            current = {
-                "display_name": self._current.display_name,
-                "status": self._current.status,
-                "downloaded": self._current.downloaded,
-                "total": self._current.total,
-                "speed": self._current.speed,
-                "error": self._current.error,
+    def status(self):
+        with self._lock:
+            return {
+                "state": self._state,
+                "current": self._current.to_dict() if self._current else None,
+                "queue": [j.display_name for j in self._queue],
+                "history": list(self._history),
             }
-        queue_list = [
-            {
-                "display_name": q.display_name,
-                "status": q.status,
-            }
-            for q in self._queue
-        ]
-        return {"current": current, "queue": queue_list, "running": self._running}
 
+    # --- worker ---
 
-# Global instance
-_queue = DownloadQueue()
+    def _set_state(self, state):
+        if state != self._state:
+            logger.info(f"Download worker: {state}")
+        self._state = state
 
-
-def enqueue_download(strm_path: str, mkv_path: str, url: str):
-    """Add a download to the queue."""
-    item = DownloadItem(strm_path, mkv_path, url)
-    _queue.enqueue(item)
-    _queue.start()
-
-
-def get_status() -> dict:
-    return _queue.get_status()
-
-
-def find_strm_files(vods_dir: str) -> list[str]:
-    """Find all .strm files under vods_dir."""
-    strm_files = []
-    for root, _, files in os.walk(vods_dir):
-        for f in files:
-            if f.endswith(".strm"):
-                strm_files.append(os.path.join(root, f))
-    return strm_files
-
-
-def read_strm_url(strm_path: str) -> str | None:
-    """Read URL from .strm file."""
-    try:
-        with open(strm_path, "r") as f:
-            return f.read().strip()
-    except OSError as e:
-        logger.error(f"Failed to read {strm_path}: {e}")
+    def _blocked_reason(self, job, downloading=False):
+        if not in_window(self.hours):
+            start, end = self.hours
+            return f"waiting for download hours {start:02d}-{end:02d}"
+        free = shutil.disk_usage(os.path.dirname(job.target_path)).free
+        if free < self.min_free_bytes:
+            return f"paused: only {free / 1024 ** 3:.0f} GB free"
+        if self.busy_check:
+            try:
+                reason = self.busy_check(downloading)
+            except Exception as e:
+                # Do not block downloads forever because Jellyfin/provider is unreachable
+                logger.warning(f"Busy check failed, continuing: {e}")
+                reason = None
+            if reason:
+                return f"paused: {reason}"
         return None
 
+    def _next_job(self):
+        with self._lock:
+            if self._queue:
+                self._current = self._queue.pop(0)
+                self._cancel_current = False
+                return self._current
+            return None
 
-def scan_and_enqueue(vods_dir: str, download_filters: list[str]):
-    """Scan .strm files, enqueue those matching download filters.
+    def _finish_batch_if_idle(self):
+        with self._lock:
+            if self._queue or not self._completed_batch:
+                return
+            batch, self._completed_batch = self._completed_batch, []
+        if self.on_batch_done:
+            try:
+                self.on_batch_done(batch)
+            except Exception as e:
+                logger.error(f"Download completion hook failed: {e}")
 
-    download_filters: list of series/movie names to download.
-    """
-    strm_files = find_strm_files(vods_dir)
-    count = 0
+    def _record(self, job, result):
+        with self._lock:
+            self._history.insert(0, {
+                "display_name": job.display_name,
+                "result": result,
+                "time": time.strftime("%Y-%m-%d %H:%M"),
+            })
+            del self._history[HISTORY_SIZE:]
+            if result == "done":
+                self._completed_batch.append(job.display_name)
 
-    for strm_path in strm_files:
-        # Determine if this belongs to a download-filtered series/movie
-        rel = os.path.relpath(strm_path, vods_dir)
-        parts = Path(rel).parts
+    def _worker(self):
+        while True:
+            job = self._next_job()
+            if job is None:
+                self._set_state("idle")
+                self._finish_batch_if_idle()
+                self._wake.wait(IDLE_INTERVAL)
+                self._wake.clear()
+                continue
 
-        if not parts:
-            continue
+            reason = self._blocked_reason(job)
+            if reason:
+                self._requeue_front(job)
+                self._set_state(reason)
+                self._wake.wait(IDLE_INTERVAL)
+                self._wake.clear()
+                continue
 
-        name = None
-        if parts[0] == "series" and len(parts) >= 2:
-            name = parts[1]
-        elif parts[0] == "movies" and len(parts) >= 2:
-            name = parts[1]
-        else:
-            continue
+            self._run_job(job)
+            with self._lock:
+                self._current = None
 
-        # Check against download filters
-        if not download_filters:
-            continue
+    def _requeue_front(self, job):
+        with self._lock:
+            if not self._cancel_current:
+                self._queue.insert(0, job)
+            self._current = None
 
-        matched = False
-        for f in download_filters:
-            if f.lower() in name.lower():
-                matched = True
-                break
+    def _run_job(self, job):
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            self._set_state(f"downloading {job.display_name}")
+            try:
+                self._download(job)
+            except Paused as e:
+                logger.info(f"Paused {job.display_name}: {e}")
+                self._requeue_front(job)
+                return
+            except Cancelled:
+                logger.info(f"Cancelled {job.display_name}")
+                self._remove(job.part_path)
+                return
+            except (requests.exceptions.RequestException, OSError) as e:
+                logger.warning(f"{job.display_name}: attempt {attempt}/{MAX_ATTEMPTS} failed: {e}")
+                if attempt < MAX_ATTEMPTS:
+                    time.sleep(RETRY_DELAY)
+                    continue
+                self._failed_until[job.target_path] = time.time() + FAILED_BACKOFF
+                self._record(job, "failed")
+                logger.error(f"Giving up on {job.display_name} for now")
+                return
+            else:
+                self._remove(job.strm_path)
+                self._record(job, "done")
+                logger.info(f"Downloaded {job.display_name} ({job.total / 1024 ** 2:.0f} MB)")
+                return
 
-        if not matched:
-            continue
+    def _check_pause(self, job):
+        with self._lock:
+            if self._cancel_current:
+                raise Cancelled()
+        reason = self._blocked_reason(job, downloading=True)
+        if reason:
+            raise Paused(reason)
 
-        url = read_strm_url(strm_path)
-        if not url:
-            continue
+    def _download(self, job):
+        offset = os.path.getsize(job.part_path) if os.path.exists(job.part_path) else 0
+        headers = {"User-Agent": self.user_agent}
+        if offset:
+            headers["Range"] = f"bytes={offset}-"
 
-        mkv_path = strm_path.replace(".strm", ".mkv")
+        # requests follows the provider's 302 to the CDN and keeps the headers
+        with requests.get(job.url, headers=headers, stream=True, timeout=(15, 60)) as resp:
+            if resp.status_code == 416 and offset:
+                # The .part file already holds the whole file
+                job.total = job.downloaded = offset
+                os.replace(job.part_path, job.target_path)
+                return
+            resp.raise_for_status()
 
-        # Skip if .mkv already exists (already downloaded)
-        if os.path.exists(mkv_path):
-            continue
+            if resp.status_code == 206 and "Content-Range" in resp.headers:
+                job.total = int(resp.headers["Content-Range"].rsplit("/", 1)[-1])
+                mode = "ab"
+            else:
+                # Server ignored the range: start over
+                offset = 0
+                job.total = int(resp.headers.get("Content-Length", 0))
+                mode = "wb"
+            job.downloaded = offset
 
-        enqueue_download(strm_path, mkv_path, url)
-        count += 1
+            start = last_check = time.time()
+            received = 0
+            with open(job.part_path, mode) as f:
+                for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    received += len(chunk)
+                    job.downloaded += len(chunk)
 
-    if count:
-        logger.info(f"Enqueued {count} items for download")
-    return count
+                    now = time.time()
+                    elapsed = max(now - start, 0.001)
+                    job.speed = received / elapsed
+                    if self.speed_limit and job.speed > self.speed_limit:
+                        time.sleep(received / self.speed_limit - elapsed)
+                    if now - last_check >= CHECK_INTERVAL:
+                        last_check = now
+                        self._check_pause(job)
+
+        size = os.path.getsize(job.part_path)
+        if job.total and size < job.total:
+            raise requests.exceptions.RequestException(f"incomplete: {size}/{job.total} bytes")
+        os.replace(job.part_path, job.target_path)
+
+    @staticmethod
+    def _remove(path):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            logger.warning(f"Could not remove {path}: {e}")
+
+
+queue = DownloadQueue()

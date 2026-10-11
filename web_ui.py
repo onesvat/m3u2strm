@@ -120,13 +120,6 @@ def index():
                 item["is_selected"] = item["title"] in include_live
                 item["is_download"] = False
 
-        # Get download queue status
-        try:
-            from downloader import get_status as dl_status
-            download_status = dl_status()
-        except Exception:
-            download_status = {"current": None, "queue": [], "running": False}
-
         return render_template(
             "index.html",
             series=all_series_names,
@@ -137,7 +130,6 @@ def index():
             include_live=include_live,
             download_series=download_series,
             download_movies=download_movies,
-            download_status=download_status,
             has_filters=has_filters,
             filters_mandatory=True,
             recently_added=recently_added,
@@ -212,35 +204,37 @@ def toggle_download():
 
     filters = load_filters()
     filter_key = type_map[item_type]
-
-    filter_list = filters.get(filter_key, [])
+    include_key = "series" if item_type == "series" else "movies"
     item_title_lower = item_title.lower()
 
-    found = False
-    for i, f in enumerate(filter_list):
-        if f.lower() == item_title_lower:
-            filters[filter_key].pop(i)
-            selected = False
-            found = True
-            break
+    download_list = filters.setdefault(filter_key, [])
+    include_list = filters.setdefault(include_key, [])
 
-    if not found:
-        filters[filter_key].append(item_title)
-        selected = True
+    matches = [f for f in download_list if f.lower() == item_title_lower]
+    if matches:
+        for f in matches:
+            download_list.remove(f)
+        download = False
+    else:
+        download_list.append(item_title)
+        # Downloads are made from STRM entries, so the title must be included too
+        if not any(f.lower() == item_title_lower for f in include_list):
+            include_list.append(item_title)
+        download = True
 
-    save_filters(filters, trigger_task=False)
+    # Rerun so the download queue picks up the change right away
+    save_filters(filters)
 
-    return jsonify({"success": True, "download": selected})
+    selected = any(f.lower() == item_title_lower for f in include_list)
+    return jsonify({"success": True, "download": download, "selected": selected})
 
 
 @app.route("/download_status", methods=["GET"])
 def download_status():
     """Get current download queue status."""
-    try:
-        from downloader import get_status as dl_status
-        return jsonify(dl_status())
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    from downloader import queue
+
+    return jsonify(queue.status())
 
 
 @app.route("/save_and_generate", methods=["POST"])
@@ -249,16 +243,13 @@ def save_and_generate():
     include_series = data.get("series", [])
     include_movies = data.get("movies", [])
     include_live = data.get("live", [])
-    download_series = data.get("download_series", [])
-    download_movies = data.get("download_movies", [])
 
+    # Download lists are managed by /toggle_download; keep them as they are
     filters = load_filters()
     filters.update({
         "series": include_series,
         "movies": include_movies,
         "live": include_live,
-        "download_series": download_series,
-        "download_movies": download_movies,
     })
     save_filters(filters)
 

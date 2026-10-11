@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application files
 COPY task.py .
 COPY web_ui.py .
+COPY downloader.py .
 COPY requirements.txt .
 COPY templates templates
 

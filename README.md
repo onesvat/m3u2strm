@@ -93,11 +93,34 @@ Content type is now automatically detected from URL patterns:
 | `JELLYFIN_URL` | Jellyfin server URL | `http://192.168.1.100:8096` |
 | `JELLYFIN_API_KEY` | Jellyfin API key | `32character_api_key_from_jellyfin` |
 
+### Downloads
+
+Titles marked with the ⬇ toggle in the web UI are downloaded as local files
+instead of being streamed. Files are fetched one at a time into
+`<name>.mkv.part`, resumed after interruptions, then renamed; the `.strm` for
+that episode is removed and not recreated while the local file exists.
+Turning the toggle off cancels pending downloads but keeps finished files.
+
+IPTV accounts usually allow a single connection, so the downloader yields it:
+it pauses while Jellyfin is playing a stream or live channel, and does not
+start a file while the provider reports all connections in use (checked via
+the Xtream `player_api.php` derived from `M3U_URL`).
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DOWNLOAD_HOURS` | Local hours when downloads may run, `start-end` (end exclusive, may wrap midnight); empty = always | empty |
+| `DOWNLOAD_MIN_FREE_GB` | Pause when free space on the media disk drops below this | `20` |
+| `DOWNLOAD_SPEED_LIMIT_KBPS` | Throttle in KB/s, `0` = unlimited | `0` |
+
+`DOWNLOAD_HOURS` uses the container's local time; mount `/etc/localtime`
+(see `docker-compose.yml`) or the hours are UTC.
+
 ## Web UI
 
 Access the web UI at `http://your-server-ip:8475` to:
 - Browse all content from your M3U playlist
 - Select specific series, movies, and channels to include
+- Mark series and movies for download and follow the download queue
 - Search for specific titles
 - Save your selections for STRM generation
 
@@ -110,7 +133,8 @@ vods/
 ├── series/
 │   └── Show Name/
 │       └── Season 01/
-│           └── Show Name S01E01.strm
+│           ├── Show Name S01E01.strm
+│           └── Show Name S01E02.mkv   (downloaded)
 ├── movies/
 │   └── Movie Name (2023)/
 │       └── Movie Name (2023).strm
