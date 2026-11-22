@@ -969,6 +969,14 @@ def get_m3u_file():
                 logger.info("M3U file was recently downloaded, skipping download")
                 return m3u_file
 
+        # Never open a second provider connection while a download is running:
+        # most IPTV panels allow a single concurrent connection per account.
+        if downloader.queue.is_transferring():
+            logger.info(
+                "Download in progress; skipping playlist refresh this cycle"
+            )
+            return m3u_file
+
         # Download the file
         if download_from_url(m3u_url, m3u_file):
             return m3u_file

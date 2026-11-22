@@ -157,6 +157,11 @@ class DownloadQueue:
         self._wake.set()
         return len(pending)
 
+    def is_transferring(self):
+        """True while a file is actually being pulled from the provider."""
+        with self._lock:
+            return self._state.startswith("downloading")
+
     def status(self):
         with self._lock:
             return {
