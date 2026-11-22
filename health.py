@@ -33,8 +33,12 @@ def mask(text):
     return text
 
 
-def record(name, ok, error=None, **details):
-    """Remember the latest outcome of an operation (playlist, run, jellyfin, telegram)."""
+def record(name, ok, error=None, ts=None, **details):
+    """Remember the latest outcome of an operation (playlist, run, jellyfin, telegram).
+
+    ``ts`` overrides the success timestamp, for callers that reuse an older
+    artifact (e.g. the playlist file written by a previous cycle).
+    """
     now = time.time()
     with _lock:
         event = _events.setdefault(name, {"last_success": None})
@@ -42,7 +46,7 @@ def record(name, ok, error=None, **details):
         event["last_attempt"] = now
         event["ok"] = ok
         if ok:
-            event["last_success"] = now
+            event["last_success"] = ts or now
             event["error"] = None
         else:
             event["error"] = mask(str(error)) if error else "failed"

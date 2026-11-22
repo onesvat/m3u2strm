@@ -943,6 +943,18 @@ def download_from_url(url, destination):
         return False
 
 
+def _note_playlist_reuse(m3u_file):
+    """Keep the playlist health event alive while a previous file is reused.
+
+    The file's mtime is reported as the success time, so the HA sensor shows
+    when the playlist really changed instead of going unknown on restarts.
+    """
+    try:
+        health.record("playlist", True, ts=os.path.getmtime(m3u_file), reused=True)
+    except OSError:
+        pass
+
+
 def get_m3u_file():
     """Get the path to the M3U file. Download if needed."""
     # Get M3U file path from environment variable
@@ -953,6 +965,8 @@ def get_m3u_file():
     logger.debug(f"M3U_FILE env: {m3u_file}, M3U_URL env: {m3u_url}")
 
     if m3u_file:
+        if os.path.exists(m3u_file):
+            _note_playlist_reuse(m3u_file)
         return m3u_file
     elif m3u_url:
         logger.info(f"Downloading M3U file from URL: {m3u_url}")
@@ -967,6 +981,7 @@ def get_m3u_file():
             # Check if the file was modified in the last 5 minutes
             if current_time - last_modified < 5 * 60:
                 logger.info("M3U file was recently downloaded, skipping download")
+                _note_playlist_reuse(m3u_file)
                 return m3u_file
 
         # Never open a second provider connection while a download is running:
@@ -975,6 +990,7 @@ def get_m3u_file():
             logger.info(
                 "Download in progress; skipping playlist refresh this cycle"
             )
+            _note_playlist_reuse(m3u_file)
             return m3u_file
 
         # Download the file
